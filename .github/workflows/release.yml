@@ -1,0 +1,41 @@
+name: Release
+
+# Sube una etiqueta como v1.2.0 para compilar «NX Build.app» y publicarla como versión de GitHub.
+# Las apps instaladas la encuentran en releases/latest (Updater.swift) y el instalador (install.sh) la descarga.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift
+        run: swift --version
+
+      - name: Build
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION="0.0.0"
+          OUT=build ZIP=1 VERSION="$VERSION" BUILD="$GITHUB_RUN_NUMBER" ./make_app.sh
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/NXBuild.zip build/NXBuild.zip.sha256 \
+            --title "NX Build $GITHUB_REF_NAME" --generate-notes
+
+      - name: Upload artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NXBuild
+          path: build/NXBuild.zip

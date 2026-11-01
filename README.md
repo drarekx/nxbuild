@@ -1,0 +1,55 @@
+# NX Build
+
+App de macOS (SwiftUI) para construir juegos de Switch como app de Mac o IPA de iPhone con [nxnative](../nxnative), y jugarlos desde una biblioteca.
+
+Es la interfaz de `nxnative/scripts/build_ipa_from_nsp.py`: lee su progreso (`--progress json`), explica los errores conocidos y propone el siguiente paso.
+
+## Instalar
+
+Repositorio público:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/drarekx/nxbuild/main/install.sh | bash
+```
+
+Mientras el repositorio sea privado, con [gh](https://cli.github.com) y la sesión iniciada (`gh auth login`):
+
+```sh
+gh api repos/drarekx/nxbuild/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
+```
+
+El instalador descarga la última versión, comprueba su SHA-256, la deja en `/Applications` (o `~/Applications`) y la abre. Una versión concreta: `… | bash -s -- --version 1.2.0`.
+
+Requisitos: Mac con Apple Silicon y macOS 15 o posterior. Lo que necesitan las builds (Xcode, Python con sus módulos, Homebrew, el repositorio nxnative) se comprueba e instala desde la propia app: **Dependencias** (⇧⌘D).
+
+## Actualizar
+
+La app busca versiones nuevas al abrirse y una vez al día; también en **NX Build › Buscar actualizaciones…**. Descarga la versión, comprueba su huella, sustituye la app y la vuelve a abrir. Con el repositorio privado usa el token de `gh auth token`; no lo guarda.
+
+## Qué hace
+
+- **Biblioteca**: las apps de juego construidas, con su estado de partidas en la nube, opciones de lanzamiento, DLC dentro de la app, log y copias de seguridad. Doble clic para jugar.
+- **Nueva build**: arrastra NSP, NSZ, DLC o la carpeta del juego; comprueba las claves (`prod.keys`) descifrando las cabeceras NCA, avisa de carpetas en la nube y del compilador Metal, y construye.
+- **Build en curso**: etapas, progreso, tiempo restante y log; aviso en el Dock y notificación al terminar. Cancelar para todo el grupo de procesos.
+- **Errores**: clasifica los mensajes del script y ofrece el arreglo (abrir Dependencias, reintentar con el permiso adecuado, copiar un diagnóstico sin claves ni rutas personales).
+- **Partidas en la nube**: elige la carpeta (iCloud Drive) por la que cada juego sincroniza su partida con otro Mac o el iPhone.
+- **Liberar espacio**: borra lo que la siguiente build vuelve a generar.
+
+## Desarrollo
+
+```sh
+swift build                 # comprobación rápida
+swift test                  # tests (algunos usan juegos y claves locales y se saltan si no están)
+./make_app.sh               # ../NX Build.app, versión = última etiqueta v*
+OUT=build ZIP=1 VERSION=1.2.0 ./make_app.sh   # build/NX Build.app + build/NXBuild.zip + .sha256
+```
+
+## Publicar una versión
+
+```sh
+git tag v1.2.0 && git push origin v1.2.0
+```
+
+`.github/workflows/release.yml` compila con esa versión y publica `NXBuild.zip` y `NXBuild.zip.sha256`. La app no está notarizada (firma ad hoc); el instalador y el actualizador quitan la cuarentena.
+
+Mejoras pendientes: [MEJORAS.md](MEJORAS.md).

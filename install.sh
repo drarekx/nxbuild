@@ -1,8 +1,7 @@
 #!/bin/bash
 # Instalador de NX Build.
-#   Repositorio público:  curl -fsSL https://raw.githubusercontent.com/drarekx/nxbuild/main/install.sh | bash
-#   Repositorio privado:  gh api repos/drarekx/nxbuild/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
-# Con el repositorio privado la descarga va por gh (con tu sesión: gh auth login).
+#   curl -fsSL https://raw.githubusercontent.com/drarekx/nxbuild/main/install.sh | bash
+# Si GitHub no deja descargar sin sesión (repositorio privado), lo intenta con gh.
 # Opciones (después de `bash -s --`):
 #   --version 1.2.0   instala esa versión en vez de la última
 set -euo pipefail

@@ -1,31 +1,30 @@
 # NX Build
 
-App de macOS (SwiftUI) para construir juegos de Switch como app de Mac o IPA de iPhone con [nxnative](../nxnative), y jugarlos desde una biblioteca.
+App de macOS (SwiftUI) para construir juegos de Switch como app de Mac o IPA de iPhone con [nxnative](https://github.com/seedds/nxnative), y jugarlos desde una biblioteca.
 
-Es la interfaz de `nxnative/scripts/build_ipa_from_nsp.py`: lee su progreso (`--progress json`), explica los errores conocidos y propone el siguiente paso.
+Es la interfaz de `scripts/build_ipa_from_nsp.py` de nxnative: lee su progreso (`--progress json`), explica los errores conocidos y propone el siguiente paso. NX Build no incluye nxnative ni ningún juego, clave o firmware: necesitas tus propios volcados y tu `prod.keys`.
+
+## Qué necesita cada cosa
+
+| Para… | Hace falta |
+|---|---|
+| **Construir** un juego | Un clon de [nxnative](https://github.com/seedds/nxnative) (Ajustes › Repositorio nxnative), Xcode con su compilador Metal, Python 3.12+ con sus módulos y Homebrew. Dependencias (⇧⌘D) lo comprueba e instala, salvo el clon de nxnative. |
+| **Jugar** y cargar partidas | Nada más: cada app de juego construida lleva dentro todo lo que necesita. Funciona sin nxnative, sin Python y sin Xcode, también en otro Mac con Apple Silicon. |
+| **Partidas en la nube** | La misma carpeta de iCloud Drive elegida en cada Mac (o en el iPhone). |
 
 ## Instalar
-
-Repositorio público:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/drarekx/nxbuild/main/install.sh | bash
 ```
 
-Mientras el repositorio sea privado, con [gh](https://cli.github.com) y la sesión iniciada (`gh auth login`):
-
-```sh
-gh api repos/drarekx/nxbuild/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
-```
-
 El instalador descarga la última versión, comprueba su SHA-256, la deja en `/Applications` (o `~/Applications`) y la abre. Una versión concreta: `… | bash -s -- --version 1.2.0`.
 
-Requisitos: Mac con Apple Silicon y macOS 15 o posterior. Lo que necesitan las builds (Xcode, Python con sus módulos, Homebrew, el repositorio nxnative) se comprueba e instala desde la propia app: **Dependencias** (⇧⌘D).
+Requisitos: Mac con Apple Silicon y macOS 15 o posterior. Para construir, clona nxnative (`git clone https://github.com/seedds/nxnative.git`) e indica su carpeta en Ajustes; el resto se instala desde **Dependencias** (⇧⌘D).
 
 ## Actualizar
 
-La app busca versiones nuevas al abrirse y una vez al día; también en **NX Build › Buscar actualizaciones…**. Descarga la versión, comprueba su huella, sustituye la app y la vuelve a abrir. Con el repositorio privado usa el token de `gh auth token`; no lo guarda.
-
+La app busca versiones nuevas al abrirse y una vez al día; también en **NX Build › Buscar actualizaciones…**. Descarga la versión, comprueba su huella, sustituye la app y la vuelve a abrir.
 ## Qué hace
 
 - **Biblioteca**: las apps de juego construidas, con su estado de partidas en la nube, opciones de lanzamiento, DLC dentro de la app, log y copias de seguridad. Doble clic para jugar.

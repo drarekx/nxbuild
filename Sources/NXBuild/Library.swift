@@ -32,6 +32,19 @@ struct LibraryGame: Identifiable, Equatable, Sendable {
         URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/nxnative/\(titleID)/save")
     }
 
+    /// Copiada de otro Mac (AirDrop, descarga, zip): macOS le pone com.apple.quarantine y, como la app solo tiene firma
+    /// ad hoc (sin notarizar), Gatekeeper no deja abrirla.
+    var isQuarantined: Bool { Quarantine.isSet(path) }
+
+    /// LSMinimumSystemVersion que pone nxnative al construir (p. ej. 26.6) si este Mac tiene una versión anterior.
+    var requiredSystemIfNewer: String? {
+        guard let info = NSDictionary(contentsOf: url.appendingPathComponent("Contents/Info.plist")),
+              let min = info["LSMinimumSystemVersion"] as? String else { return nil }
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        let mine = "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+        return Updater.compare(min, mine) == .orderedDescending ? min : nil
+    }
+
     static func read(_ app: URL) -> LibraryGame? {
         guard app.pathExtension == "app",
               let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")) as? [String: Any],

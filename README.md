@@ -9,7 +9,7 @@ Es la interfaz de `scripts/build_ipa_from_nsp.py` de nxnative: lee su progreso (
 | Para… | Hace falta |
 |---|---|
 | **Construir** un juego | Un clon de [nxnative](https://github.com/seedds/nxnative) (Ajustes › Repositorio nxnative), Xcode con su compilador Metal, Python 3.12+ con sus módulos y Homebrew. Dependencias (⇧⌘D) lo comprueba e instala, salvo el clon de nxnative. |
-| **Jugar** y cargar partidas | Nada más: cada app de juego construida lleva dentro todo lo que necesita. Funciona sin nxnative, sin Python y sin Xcode, también en otro Mac con Apple Silicon. |
+| **Jugar** y cargar partidas | Nada más: cada app de juego construida lleva dentro todo lo que necesita. Funciona sin nxnative, sin Python y sin Xcode, también en otro Mac con Apple Silicon y la versión de macOS que pida el juego. Copiada a otro Mac, quita la cuarentena: **Permitir abrir** en NX Build o `xattr -dr com.apple.quarantine "Juego.app"`. |
 | **Partidas en la nube** | La misma carpeta de iCloud Drive elegida en cada Mac (o en el iPhone). |
 
 ## Instalar
@@ -32,6 +32,7 @@ La app busca versiones nuevas al abrirse y una vez al día; también en **NX Bui
 - **Build en curso**: etapas, progreso, tiempo restante y log; aviso en el Dock y notificación al terminar. Cancelar para todo el grupo de procesos.
 - **Errores**: clasifica los mensajes del script y ofrece el arreglo (abrir Dependencias, reintentar con el permiso adecuado, copiar un diagnóstico sin claves ni rutas personales).
 - **Partidas en la nube**: elige la carpeta (iCloud Drive) por la que cada juego sincroniza su partida con otro Mac o el iPhone.
+- **Juegos copiados de otro Mac**: detecta la marca de cuarentena que pone macOS (AirDrop, descargas) y la quita con **Permitir abrir**, sin tocar la firma; avisa si el juego pide una versión de macOS más nueva que la del Mac.
 - **Liberar espacio**: borra lo que la siguiente build vuelve a generar.
 
 ## Desarrollo

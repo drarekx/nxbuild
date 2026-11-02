@@ -26,6 +26,7 @@ struct LibraryView: View {
     @State private var cloudFor: LibraryGame?
     @State private var error: String?
     @State private var refreshTick = 0   // repinta estados tras cerrar una hoja
+    @State private var allowFor: LibraryGame?   // pide permiso para quitar la marca de cuarentena y jugar
 
     private var shown: [LibraryGame] {
         let q = search.trimmingCharacters(in: .whitespaces)
@@ -70,6 +71,12 @@ struct LibraryView: View {
         .task { await library.refresh() }
         .sheet(item: $optionsFor, onDismiss: { refreshTick += 1 }) { g in LaunchOptionsView(game: g) }
         .sheet(item: $cloudFor, onDismiss: { refreshTick += 1 }) { g in CloudSavesView(game: g) }
+        .alert("Este juego viene de otro Mac", isPresented: .constant(allowFor != nil), presenting: allowFor) { g in
+            Button("Permitir y jugar") { allowFor = nil; allow(g, thenPlay: true) }
+            Button("Cancelar", role: .cancel) { allowFor = nil }
+        } message: { _ in
+            Text("macOS lo ha marcado como descargado y, como no está notarizado por Apple, no dejará abrirlo. Permitirlo quita esa marca de esta copia (lo mismo que «Abrir igualmente» en Privacidad y seguridad). Hazlo solo con juegos que hayas construido tú.")
+        }
         .alert("No se pudo abrir el juego", isPresented: .constant(error != nil)) {
             Button("OK") { error = nil }
         } message: { Text(error ?? "") }
@@ -111,9 +118,21 @@ struct LibraryView: View {
     }
 
     private func play(_ g: LibraryGame) {
+        if g.isQuarantined { allowFor = g; return }
         Task {
             do { try await library.play(g, skipWindow: settings.skipGameWindow) }
             catch { self.error = error.localizedDescription }
+        }
+    }
+
+    /// Quita la marca de cuarentena (Quarantine.remove) y, si se pide, abre el juego.
+    private func allow(_ g: LibraryGame, thenPlay: Bool) {
+        Task {
+            do {
+                try await Quarantine.remove(from: g.path)
+                refreshTick += 1
+                if thenPlay { play(g) }
+            } catch { self.error = error.localizedDescription }
         }
     }
 
@@ -134,7 +153,11 @@ struct LibraryView: View {
                 .aspectRatio(4 / 3, contentMode: .fit)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(g.titleID).font(.caption.monospaced()).foregroundStyle(.secondary)
-                    StatusTag(text: cloud.tag, color: cloud.color)
+                    if g.isQuarantined {
+                        StatusTag(text: "Bloqueado por macOS", color: .orange)
+                    } else {
+                        StatusTag(text: cloud.tag, color: cloud.color)
+                    }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .id(refreshTick)
@@ -149,6 +172,7 @@ struct LibraryView: View {
             Button("Jugar") { play(g) }
             Button("Opciones de lanzamiento…") { optionsFor = g }.disabled(!g.hasLaunchSettings)
             Button("Partidas en la nube…") { cloudFor = g }
+            if g.isQuarantined { Button("Permitir abrir") { allow(g, thenPlay: false) } }
             Divider()
             Button("Mostrar en Finder") { NSWorkspace.shared.activateFileViewerSelecting([g.url]) }
         }
@@ -161,6 +185,8 @@ struct LibraryView: View {
         let dlc = g.dlcCount
         let backups = URL(fileURLWithPath: g.saveURL.path + "-backups")
         let fm = FileManager.default
+        let quarantined = g.isQuarantined
+        let needsSystem = g.requiredSystemIfNewer
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -181,6 +207,20 @@ struct LibraryView: View {
                         .help(g.hasLaunchSettings ? "Opciones de lanzamiento" : "Esta app no trae launcher.json: vuelve a construirla")
                         .disabled(!g.hasLaunchSettings)
                         .accessibilityLabel("Opciones de lanzamiento")
+                }
+                if quarantined {
+                    VStack(alignment: .leading, spacing: 8) {
+                        NoteCallout(text: "Copiado de otro Mac: macOS lo ha marcado como descargado y no deja abrirlo porque no está notarizado por Apple.")
+                        Button("Permitir abrir") { allow(g, thenPlay: false) }
+                            .help("Quita la marca com.apple.quarantine de esta copia (xattr -dr)")
+                    }
+                }
+                if let v = needsSystem {
+                    let os = ProcessInfo.processInfo.operatingSystemVersion
+                    Label("Necesita macOS \(v) o posterior; este Mac tiene \(os.majorVersion).\(os.minorVersion).\(os.patchVersion). Actualiza macOS o constrúyelo con una versión de nxnative que admita la tuya.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 14) {
                     GridRow {

@@ -32,7 +32,7 @@ La app busca versiones nuevas al abrirse y una vez al día; también en **NX Bui
 - **Build en curso**: etapas, progreso, tiempo restante y log; aviso en el Dock y notificación al terminar. Cancelar para todo el grupo de procesos.
 - **Errores**: clasifica los mensajes del script y ofrece el arreglo (abrir Dependencias, reintentar con el permiso adecuado, copiar un diagnóstico sin claves ni rutas personales).
 - **Partidas en la nube**: elige la carpeta (iCloud Drive) por la que cada juego sincroniza su partida con otro Mac o el iPhone.
-- **Juegos copiados de otro Mac**: detecta la marca de cuarentena que pone macOS (AirDrop, descargas) y la quita con **Permitir abrir**, sin tocar la firma; avisa si el juego pide una versión de macOS más nueva que la del Mac.
+- **Juegos copiados de otro Mac**: detecta la marca de cuarentena que pone macOS (AirDrop, descargas) y la quita con **Permitir abrir** (pide la contraseña de administrador si los archivos son de solo lectura o de otro usuario), sin tocar la firma; avisa si el juego pide una versión de macOS más nueva que la del Mac.
 - **Liberar espacio**: borra lo que la siguiente build vuelve a generar.
 
 ## Desarrollo

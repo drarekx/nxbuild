@@ -413,7 +413,11 @@ struct HomeView: View {
         VStack(spacing: 0) {
             Rectangle().fill(Color.consoleLine).frame(height: 1)
             HStack {
-                Text("NX Build \(Updater.currentVersion)").foregroundStyle(Color.consoleDim)
+                HStack(spacing: 10) {
+                    Image(nsImage: NSApp.applicationIconImage).resizable().interpolation(.high).frame(width: 30, height: 30)
+                    Text("NX ").fontWeight(.heavy) + Text("Build").fontWeight(.heavy).foregroundStyle(Color.consoleAccent)
+                    Text(Updater.currentVersion).foregroundStyle(Color.consoleDim)
+                }
                 Spacer()
                 HStack(spacing: 24) {
                     hint("A", "Jugar") { if let g = current { play(g) } }.disabled(current == nil)

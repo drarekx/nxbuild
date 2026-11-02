@@ -28,8 +28,8 @@ struct LibraryView: View {
     @State private var refreshTick = 0   // repinta estados tras cerrar una hoja
     @State private var allowFor: LibraryGame?   // pide permiso para quitar la marca de cuarentena y jugar
     @State private var copyOffer: (game: LibraryGame, why: String)?   // no se pudo quitar: ofrecer copia limpia
-    @State private var busy: Busy?               // quitando la marca o copiando: qué juego, qué paso, cuánto
-    struct Busy { var path: String; var text: String; var fraction: Double? }
+    @State private var busy: Busy?               // quitando la marca o copiando: ventana de progreso encima
+    @State private var work: Task<Void, Never>?
     private static let appsFolder = NSHomeDirectory() + "/Applications"
 
     private var shown: [LibraryGame] {
@@ -75,6 +75,9 @@ struct LibraryView: View {
         .task { await library.refresh() }
         .sheet(item: $optionsFor, onDismiss: { refreshTick += 1 }) { g in LaunchOptionsView(game: g) }
         .sheet(item: $cloudFor, onDismiss: { refreshTick += 1 }) { g in CloudSavesView(game: g) }
+        .sheet(isPresented: .constant(busy != nil)) {
+            if let b = busy { BusySheet(busy: b) { work?.cancel() } }
+        }
         .alert("Este juego viene de otro Mac", isPresented: .constant(allowFor != nil), presenting: allowFor) { g in
             Button("Permitir y jugar") { allowFor = nil; allow(g, thenPlay: true) }
             Button("Cancelar", role: .cancel) { allowFor = nil }
@@ -139,17 +142,18 @@ struct LibraryView: View {
     private func allow(_ g: LibraryGame, thenPlay: Bool) {
         guard busy == nil else { return }
         selected = g.id
-        busy = Busy(path: g.path, text: "Quitando la marca…")
-        Task {
-            defer { busy = nil }
+        busy = Busy(game: g, title: "Permitiendo «\(g.name)»", progress: .init(step: "Empezando"))
+        work = Task {
+            defer { busy = nil; work = nil }
             do {
-                try await Quarantine.remove(from: g.path) { text in
-                    Task { @MainActor in if busy?.path == g.path { busy?.text = text } }
+                try await Quarantine.remove(from: g.path) { p in
+                    Task { @MainActor in if busy?.game.id == g.id { busy?.progress = p } }
                 }
                 refreshTick += 1
                 if thenPlay { busy = nil; play(g) }
+            } catch is CancellationError {
             } catch Quarantine.Failure.cancelled {
-                // el usuario canceló la contraseña: nada que avisar
+                // canceló aquí o en la contraseña: nada que avisar
             } catch {
                 copyOffer = (g, error.localizedDescription)
             }
@@ -160,17 +164,19 @@ struct LibraryView: View {
     private func cleanCopy(_ g: LibraryGame) {
         guard busy == nil else { return }
         selected = g.id
-        busy = Busy(path: g.path, text: "Copiando a ~/Applications…", fraction: 0)
-        Task {
-            defer { busy = nil }
+        busy = Busy(game: g, title: "Copia limpia de «\(g.name)»", progress: .init(step: "Empezando"))
+        work = Task {
+            defer { busy = nil; work = nil }
             do {
-                let dest = try await Quarantine.cleanCopy(of: g.path, into: Self.appsFolder) { f in
-                    Task { @MainActor in if busy?.path == g.path { busy?.fraction = f } }
+                let dest = try await Quarantine.cleanCopy(of: g.path, into: Self.appsFolder) { p in
+                    Task { @MainActor in if busy?.game.id == g.id { busy?.progress = p } }
                 }
                 if !library.folders.contains(Self.appsFolder) { library.addFolder(Self.appsFolder) }
                 await library.refresh()
                 selected = dest
                 refreshTick += 1
+            } catch is CancellationError {
+            } catch Quarantine.Failure.cancelled {
             } catch { self.error = error.localizedDescription }
         }
     }
@@ -192,7 +198,7 @@ struct LibraryView: View {
                 .aspectRatio(4 / 3, contentMode: .fit)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(g.titleID).font(.caption.monospaced()).foregroundStyle(.secondary)
-                    if busy?.path == g.path {
+                    if busy?.game.id == g.id {
                         StatusTag(text: "Trabajando…", color: .egluuText)
                     } else if g.isQuarantined {
                         StatusTag(text: "Bloqueado por macOS", color: .orange)
@@ -252,20 +258,9 @@ struct LibraryView: View {
                 if quarantined {
                     VStack(alignment: .leading, spacing: 8) {
                         NoteCallout(text: "Copiado de otro Mac: macOS lo ha marcado como descargado y no deja abrirlo porque no está notarizado por Apple.")
-                        if let b = busy, b.path == g.path {
-                            if let f = b.fraction {
-                                ProgressView(value: f) {
-                                    Text(b.text).font(.callout)
-                                } currentValueLabel: {
-                                    Text(f.formatted(.percent.precision(.fractionLength(0)))).font(.caption.monospaced())
-                                }
-                            } else {
-                                HStack(spacing: 8) { ProgressView().controlSize(.small); Text(b.text).font(.callout) }
-                            }
-                        } else {
-                            Button("Permitir abrir") { allow(g, thenPlay: false) }
-                                .help("Quita la marca com.apple.quarantine de esta copia (xattr -dr)")
-                        }
+                        Button("Permitir abrir") { allow(g, thenPlay: false) }
+                            .disabled(busy != nil)
+                            .help("Quita la marca com.apple.quarantine de esta copia")
                     }
                 }
                 if let v = needsSystem {
@@ -473,5 +468,57 @@ struct RootView: View {
             library.addFolder(out.path)
             Task { await library.refresh() }
         }
+    }
+}
+
+/// Trabajo largo sobre un juego (quitar la marca, copia limpia).
+struct Busy {
+    var game: LibraryGame
+    var title: String
+    var progress: Quarantine.Progress
+    var started = Date()
+}
+
+/// Ventana encima de la biblioteca mientras se trabaja: paso, barra, archivos, archivo en curso, tiempo y Cancelar.
+struct BusySheet: View {
+    let busy: Busy
+    let cancel: () -> Void
+
+    var body: some View {
+        let p = busy.progress
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: busy.game.path)).resizable().frame(width: 40, height: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(busy.title).font(.headline)
+                    Text(p.step).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let f = p.fraction {
+                ProgressView(value: f).tint(Color.egluu)
+            } else {
+                ProgressView().progressViewStyle(.linear).tint(Color.egluu)
+            }
+            HStack {
+                if p.total > 0 {
+                    Text("\(p.done.formatted()) de \(p.total.formatted()) archivos")
+                }
+                Spacer()
+                TimelineView(.periodic(from: busy.started, by: 1)) { ctx in
+                    Text(Duration.seconds(ctx.date.timeIntervalSince(busy.started)).formatted(.time(pattern: .minuteSecond)))
+                }
+            }
+            .font(.caption.monospaced()).foregroundStyle(.secondary)
+            Text(p.current.isEmpty ? " " : p.current)
+                .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                .lineLimit(1).truncationMode(.middle)
+            HStack {
+                Spacer()
+                Button("Cancelar", role: .cancel, action: cancel).keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .interactiveDismissDisabled()
     }
 }

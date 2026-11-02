@@ -16,6 +16,16 @@ enum Quarantine {
         path.contains("/Library/Mobile Documents/") || path.contains("/Library/CloudStorage/")
     }
 
+    /// Lo que se está haciendo, para enseñarlo: paso, archivos hechos de cuántos y el archivo en curso.
+    struct Progress: Sendable, Equatable {
+        var step: String
+        var done = 0
+        var total = 0          // 0: sin total conocido (barra indeterminada)
+        var current = ""       // ruta relativa dentro de la app
+        var fraction: Double? { total > 0 ? min(1, Double(done) / Double(total)) : nil }
+    }
+    typealias Report = @Sendable (Progress) -> Void
+
     enum Failure: LocalizedError {
         case readOnlyVolume(String)
         case cancelled
@@ -25,49 +35,62 @@ enum Quarantine {
             case .readOnlyVolume(let p):
                 "«\(p)» está en un disco de solo lectura (una imagen de disco o una carpeta compartida)."
             case .cancelled:
-                "No se ha cambiado nada: hace falta la contraseña de administrador para permitir esta app."
+                "Cancelado: no se ha terminado de permitir la app."
             case .failed(let p, let why):
                 "No se pudo permitir «\(p)»: \(why)"
             }
         }
     }
 
-    /// Quita la marca de la app y de todo lo que contiene (xattr -dr). La marca es un atributo extendido, no forma
-    /// parte de lo firmado: la firma sigue valiendo.
-    /// Primero como el usuario; si la app es de otro usuario o de root, o sus archivos son de solo lectura (borrar un
-    /// atributo exige permiso de escritura en cada archivo), lo repite como administrador: macOS pide la contraseña.
-    /// `status` recibe el paso en curso (para enseñarlo: con miles de archivos tarda).
-    nonisolated static func remove(from path: String, status: @escaping @Sendable (String) -> Void = { _ in }) async throws {
+    /// Quita la marca de la app y de todo lo que contiene, archivo a archivo (removexattr) para poder informar del
+    /// avance y cancelar. La marca es un atributo extendido, no forma parte de lo firmado: la firma sigue valiendo.
+    /// Si algún archivo no deja (de otro usuario o de solo lectura: borrar un atributo exige permiso de escritura),
+    /// lo repite como administrador con xattr -dr: macOS pide la contraseña.
+    /// Se ejecuta fuera del hilo principal (nonisolated async) y respeta la cancelación de la tarea que lo llama.
+    nonisolated static func remove(from path: String, report: @escaping Report = { _ in }) async throws {
         let name = (path as NSString).lastPathComponent
         if (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true {
             throw Failure.readOnlyVolume(name)
         }
-        try await Task.detached {
-            status(isInSyncedFolder(path) ? "Quitando la marca… (en la nube: puede tener que descargar el juego)" : "Quitando la marca…")
-            _ = run("/usr/bin/xattr", ["-dr", attribute, path])
-            guard isSet(path) || anyInside(path) else { return }
-            status("Esperando la contraseña de administrador…")
-            // Como administrador. La ruta va como argumento (quoted form), nunca dentro del texto del script.
-            // 2>&1 y exit 0: los errores de xattr vuelven como resultado del script (stdout) en vez de cortar osascript.
-            let script = [
-                "on run argv",
-                "do shell script \"/usr/bin/xattr -dr \(attribute) \" & quoted form of item 1 of argv & \" 2>&1; exit 0\" with administrator privileges",
-                "end run",
-            ]
-            let (code, out) = run("/usr/bin/osascript", script.flatMap { ["-e", $0] } + [path])
-            if out.contains("-128") { throw Failure.cancelled }   // userCanceledErr
-            if isSet(path) || anyInside(path) {
-                throw Failure.failed(name, summary(out) ?? "la marca sigue ahí después de quitarla como administrador (osascript \(code)). Puede que macOS proteja esa carpeta o que se sincronice y vuelva a ponerla.")
+        let step = isInSyncedFolder(path) ? "Quitando la marca (en la nube: puede tener que descargar archivos)" : "Quitando la marca"
+        report(Progress(step: "Contando archivos"))
+        let items = try list(path)
+        var p = Progress(step: step, total: items.count)
+        var denied = 0, firstError = ""
+        var last = Date.distantPast
+        for rel in items {
+            try Task.checkCancellation()
+            let full = rel.isEmpty ? path : path + "/" + rel
+            if removexattr(full, attribute, XATTR_NOFOLLOW) != 0, errno != ENOATTR {
+                denied += 1
+                if firstError.isEmpty { firstError = "\(rel.isEmpty ? name : rel): \(String(cString: strerror(errno)))" }
             }
-        }.value
+            p.done += 1
+            if Date().timeIntervalSince(last) > 0.1 { p.current = rel; report(p); last = Date() }
+        }
+        p.current = ""; report(p)
+        guard denied > 0 || isSet(path) || anyInside(path) else { return }
+
+        report(Progress(step: "\(denied) archivo\(denied == 1 ? "" : "s") sin permiso (\(firstError)). Esperando la contraseña de administrador…"))
+        // Como administrador. La ruta va como argumento (quoted form), nunca dentro del texto del script.
+        // 2>&1 y exit 0: los errores de xattr vuelven como resultado del script (stdout) en vez de cortar osascript.
+        let script = [
+            "on run argv",
+            "do shell script \"/usr/bin/xattr -dr \(attribute) \" & quoted form of item 1 of argv & \" 2>&1; exit 0\" with administrator privileges",
+            "end run",
+        ]
+        let (code, out) = try run("/usr/bin/osascript", script.flatMap { ["-e", $0] } + [path])
+        if out.contains("-128") { throw Failure.cancelled }   // userCanceledErr: canceló la contraseña
+        if isSet(path) || anyInside(path) {
+            throw Failure.failed(name, summary(out) ?? "la marca sigue ahí después de quitarla como administrador (osascript \(code)). Puede que macOS proteja esa carpeta o que se sincronice y vuelva a ponerla.")
+        }
     }
 
     /// Plan B cuando la marca no se deja quitar: copia la app a `folder` (~/Applications) con archivos nuevos a nombre
     /// del usuario, les da permiso de escritura y les quita la marca. Ni ditto (hace enlaces duros: comparten la marca
-    /// con el original) ni cp -X (macOS vuelve a poner la marca a los clones) sirven solos; cp -R + chmod + xattr sí.
-    /// `progress` recibe la fracción copiada (por número de archivos). Devuelve la ruta de la copia.
-    nonisolated static func cleanCopy(of path: String, into folder: String,
-                                      progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> String {
+    /// con el original) ni cp -X (macOS vuelve a poner la marca a los clones) sirven solos; cp -R + chmod + quitar sí.
+    /// Devuelve la ruta de la copia; si se cancela o falla, borra la copia a medias.
+    nonisolated static func cleanCopy(of path: String, into folder: String, report: @escaping Report = { _ in }) async throws -> String {
         let fm = FileManager.default
         let name = (path as NSString).lastPathComponent
         try fm.createDirectory(atPath: folder, withIntermediateDirectories: true)
@@ -78,25 +101,42 @@ enum Quarantine {
             dest = (folder as NSString).appendingPathComponent("\(base) \(n).app"); n += 1
         }
         let target = dest
-        try await Task.detached {
-            var count = 1
-            if let e = fm.enumerator(atPath: path) { while e.nextObject() != nil { count += 1 } }
-            let total = count
-            let (st, out) = run("/bin/cp", ["-R", "-v", path, target]) { lines in
-                progress(min(0.99, Double(lines) / Double(total)))
+        func discard() { _ = try? run("/bin/chmod", ["-R", "u+w", target]); try? fm.removeItem(atPath: target) }
+
+        report(Progress(step: "Contando archivos"))
+        let total = try list(path).count
+        let step = "Copiando a " + folder.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        report(Progress(step: step, total: total))
+        let prefix = target + "/"
+        do {
+            let (st, out) = try run("/bin/cp", ["-R", "-v", path, target]) { lines, lastLine in
+                // cp -v escribe «origen -> destino» por archivo
+                let cur = lastLine.components(separatedBy: " -> ").last.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : "" } ?? ""
+                report(Progress(step: step, done: min(lines, total), total: total, current: cur))
             }
             guard st == 0 else {
-                _ = run("/bin/chmod", ["-R", "u+w", target]); try? fm.removeItem(atPath: target)
-                throw Failure.failed(name, "no se pudo copiar: " + (summary(out.split(separator: "\n").filter { $0.hasPrefix("cp:") }.joined(separator: "\n")) ?? "cp terminó con \(st)"))
+                let errs = out.split(separator: "\n").filter { $0.hasPrefix("cp:") }.joined(separator: "\n")
+                throw Failure.failed(name, "no se pudo copiar: " + (summary(errs) ?? "cp terminó con \(st)"))
             }
-            _ = run("/bin/chmod", ["-R", "u+w", target])
-            _ = run("/usr/bin/xattr", ["-dr", attribute, target])
-            if isSet(target) || anyInside(target) {
-                throw Failure.failed(name, "la copia en \(target) también conserva la marca.")
-            }
-            progress(1)
-        }.value
+            report(Progress(step: "Dando permisos a la copia"))
+            _ = try run("/bin/chmod", ["-R", "u+w", target])
+            try await remove(from: target, report: report)
+        } catch {
+            discard()
+            throw error is CancellationError ? Failure.cancelled : error
+        }
         return target
+    }
+
+    /// Rutas relativas de todo lo que hay en la app ("" es la propia app), sin seguir enlaces simbólicos.
+    private static func list(_ path: String) throws -> [String] {
+        var out = [""]
+        guard let e = FileManager.default.enumerator(atPath: path) else { return out }
+        while let rel = e.nextObject() as? String {
+            out.append(rel)
+            if out.count % 2000 == 0 { try Task.checkCancellation() }
+        }
+        return out
     }
 
     /// Las primeras líneas de error, sin repetir el mismo «Permission denied» miles de veces.
@@ -113,30 +153,36 @@ enum Quarantine {
         return ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).contains { isSet(dir + "/" + $0) }
     }
 
-    /// Ejecuta y devuelve (código, salida). stdout y stderr juntos, leídos mientras corre (sin bloquear por un pipe
-    /// lleno); `onLines` recibe el número de líneas leídas hasta el momento.
-    private static func run(_ exe: String, _ args: [String], onLines: (@Sendable (Int) -> Void)? = nil) -> (Int32, String) {
+    /// Ejecuta y devuelve (código, salida: stdout y stderr juntos, hasta 64 KB). Lee mientras corre (sin bloquear por
+    /// un pipe lleno); `onLines` recibe las líneas leídas y la última. Si la tarea se cancela, termina el proceso.
+    private static func run(_ exe: String, _ args: [String],
+                            onLines: ((Int, String) -> Void)? = nil) throws -> (Int32, String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: exe)
         p.arguments = args
         let pipe = Pipe()
         p.standardError = pipe
         p.standardOutput = pipe
-        do { try p.run() } catch { return (-1, error.localizedDescription) }
-        var data = Data(), lines = 0, lastReport = Date.distantPast
+        try p.run()
+        var data = Data(), lines = 0, last = Date.distantPast, tail = Data()
         let h = pipe.fileHandleForReading
         while true {
+            if Task.isCancelled, p.isRunning { p.terminate() }
             let chunk = h.availableData
             if chunk.isEmpty { break }
-            if onLines != nil {
+            if data.count < 64_000 { data.append(chunk) }
+            if let onLines {
                 lines += chunk.reduce(0) { $0 + ($1 == 10 ? 1 : 0) }
-                if Date().timeIntervalSince(lastReport) > 0.25 { onLines?(lines); lastReport = Date() }
-            } else {
-                data.append(chunk)
+                tail.append(chunk)
+                if tail.count > 4096 { tail = tail.suffix(4096) }
+                if Date().timeIntervalSince(last) > 0.1 {
+                    let lastLine = String(decoding: tail, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
+                    onLines(lines, lastLine); last = Date()
+                }
             }
-            if onLines != nil, data.count < 64_000 { data.append(chunk) }   // basta con el principio para los errores
         }
         p.waitUntilExit()
+        if Task.isCancelled { throw CancellationError() }
         return (p.terminationStatus, String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

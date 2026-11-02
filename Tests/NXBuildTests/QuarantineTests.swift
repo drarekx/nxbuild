@@ -47,4 +47,25 @@ struct QuarantineTests {
         let second = try await Quarantine.cleanCopy(of: app.path, into: out)
         #expect(second == out + "/Juego 2.app")
     }
+
+    @Test func cancelledCopyLeavesNothing() async throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("q-\(UUID().uuidString)")
+        let app = tmp.appendingPathComponent("src/Juego.app/Contents/Resources")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        for i in 0..<3000 { try Data(count: 4096).write(to: app.appendingPathComponent("f\(i)")) }
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let out = tmp.appendingPathComponent("Applications").path
+        let src = tmp.appendingPathComponent("src/Juego.app").path
+        let seen = Counter()
+        let t = Task { try await Quarantine.cleanCopy(of: src, into: out) { p in if p.total > 0 { seen.add() } } }
+        try await Task.sleep(for: .milliseconds(30))
+        t.cancel()
+        await #expect(throws: (any Error).self) { try await t.value }
+        #expect(!FileManager.default.fileExists(atPath: out + "/Juego.app"))
+    }
+}
+
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock(); private var n = 0
+    func add() { lock.lock(); n += 1; lock.unlock() }
 }

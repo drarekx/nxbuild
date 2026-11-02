@@ -1,6 +1,6 @@
 # Mejoras pendientes para NX Build
 
-Lista sacada de [LNPANDY/NX2Apple](https://github.com/LNPANDY/NX2Apple) (commit `758569c`, 2 nov 2026). Su app de Mac
+Lista sacada de [LNPANDY/NX2Apple](https://github.com/LNPANDY/NX2Apple) (commit `758569c`, 2 nov 2026; revisada hasta `6d1c3007` el 2 nov 2026, ver «Novedades» al final). Su app de Mac
 se llama NSPortBuilder y está en `frontend/`. Hace lo mismo que NX Build (una interfaz para
 `scripts/build_ipa_from_nsp.py`) y bastante más. Aquí solo está lo que ellos hacen y NX Build no.
 Lo he sacado de su README, de `frontend/README.md` y de los comentarios de cabecera de sus archivos Swift.
@@ -104,10 +104,10 @@ No he ejecutado su app.
 21. **Herramientas y Python dentro del .app.** Llevan zstd, glslang, spirv-cross, xcodegen y CPython 3.13 con los módulos
     ya instalados, así que no hace falta Homebrew. .NET sigue instalándose aparte.
 22. **Asistente de primer arranque** que guía por Xcode, las claves y los juegos. Archivos: `Onboarding*.swift`.
-23. **Actualización automática de la app**, con la descarga verificada por SHA-256, y del repositorio
+23. ✅ **Hecho en parte (1 nov 2026, v1.0.0):** la app se actualiza sola desde GitHub con SHA-256. Falta la del repositorio nxnative. **Actualización automática de la app**, con la descarga verificada por SHA-256, y del repositorio
     (versión estable o experimental). Archivos: `AppUpdate.swift` y `EngineUpdater.swift`.
 24. **Desinstalar**: borra todo lo que la app creó fuera de su paquete. Archivo: `Uninstall.swift`.
-25. **Modo consola**: pantalla completa manejada con el mando. Varios idiomas. Icono propio. Tests de rendimiento.
+25. ✅ **Hecho en parte (2 nov 2026, v1.3.0–1.3.1):** inicio tipo consola con mando e icono propio. Faltan pantalla completa, idiomas y tests de rendimiento. **Modo consola**: pantalla completa manejada con el mando. Varios idiomas. Icono propio. Tests de rendimiento.
 
 ## Ideas propias (no vienen de NX2Apple)
 
@@ -119,3 +119,39 @@ No he ejecutado su app.
       reutiliza lo que no ha cambiado y la partida guardada no se toca.
     - Avisar de los DLC que son solo una licencia: NSP de menos de 1 MB sin contenido. El script ya lo indica en su informe.
     - Para saber con qué archivos se construyó cada app, guardar en `library.json` la carpeta de origen de cada build.
+
+## Novedades de NX2Apple (revisión del 2 nov 2026, `758569c` → `6d1c3007`)
+
+222 commits. La mayoría reorganizan su código (NXCore, NXModel, NXLauncher, stores) o pasan los textos a JSON
+(`frontend/l10n/`, ahora también italiano). Lo que aporta algo nuevo a NX Build:
+
+Apuntado el 2 nov 2026, pendiente. Orden sugerido: 35, 27, 30 (rápidas); luego 31, 33 y 32.
+
+27. **Avisar si la carpeta de salida está en un disco externo o en exFAT.** Es también la caché de la build, y en exFAT por
+    USB cada archivo pequeño tarda unas 14 veces más (1,7 ms frente a 0,12 ms): la primera build va mucho más lenta.
+    Además, en exFAT cada archivo lleva un `._nombre` al lado que rompe la firma de la app de Mac (ver 28). Mirar el
+    sistema de archivos del volumen (`volumeLocalizedFormatDescription` / `statfs`) al elegir la carpeta. Commit `38aafc5b`.
+28. **[motor] Archivos `._` de exFAT que rompen la app de Mac.** Su parche 0056 (enviado a seedds/nxnative#991) hace que
+    `pack_app.py` los salte. Nuestro nxnative (`65501fbb`) aún no lo tiene. Mientras tanto, NX Build puede
+    bloquear o avisar al construir una app de Mac en exFAT, o pasar `dot_clean` antes de empaquetar. Commit `09bc20ac`.
+29. **[motor] NSP con la tabla de nombres sin el último terminador** (parche 0058) y **llamadas de cola sin marco antes del
+    relleno** (parche 0059, `dm/tools/patch_nso.py`). No están en nuestro nxnative. Si un NSP falla en `nx_extract`
+    con un PFS0 «roto», puede ser esto: añadirlo a las explicaciones de fallo de `BuildFailure.swift`.
+30. **Pantalla completa y pantalla del lanzador al jugar desde el modo consola.** Al pulsar Jugar en su modo consola pasan
+    `DM_FULLSCREEN=1` y `DM_SCREEN` (la pantalla donde está el lanzador). Nuestro nxnative lo admite (`front_mac.m`,
+    `docs/settings.md`). En NX Build: opción «Jugar a pantalla completa desde el inicio».
+31. **Mods con `DM_ROMFS_OVERLAY`.** Una carpeta que se superpone a la RomFS del juego. Nuestro nxnative lo admite
+    (`hle_fs.c`). En NX Build: sección «Mods» en las opciones de lanzamiento, que elija la carpeta y la pase al jugar.
+32. **Batería de los mandos y ocultar el puntero en el modo consola.** Muestran la batería de cada mando conectado
+    (`GCController.battery`) y esconden el puntero tras unos segundos sin moverlo.
+33. **Construir desde una carpeta con los archivos del juego, sin NSP ni prod.keys.** Nuestro nxnative ya lo hace
+    (`pack_dump.py`, `dump_folder` en `build_ipa_from_nsp.py`); ellos aún no lo ofrecen en el lanzador (#445). NX Build
+    podría aceptar esa carpeta y no pedir claves en ese caso.
+34. **Restablecer cada opción por separado.** Una flecha junto a cada opción que no está en su valor probado (nosotros solo
+    tenemos «Restablecer valores probados» para todas).
+35. **Crear carpetas en el diálogo de la carpeta de salida** (`canCreateDirectories`). Trivial. Commit `c581ba1e`.
+36. **iPhone, solo con la app compartida [parche]:** exportarla como IPA sin firmar con los juegos dentro y enviar los datos
+    del juego a un dispositivo o a un disco (`ShellExport.swift`, `DriveCopy.swift`, commit `8a71b119`); preguntar antes de
+    construir si la app compartida lleva frameworks de una cadena de shaders vieja (`StaleFrameworksPrompt.swift`). Solo
+    tienen sentido si algún día hacemos la 19.
+

@@ -291,15 +291,23 @@ final class FileboxDownloads {
         saveIndex()
     }
 
-    /// Los archivos del juego (NSP/NSZ/XCI/XCZ) listos para construir: descomprime el zip en ~/NX Build/<título>
-    /// (si no estaba ya) y los busca dentro. Un descargable que ya sea un NSP se devuelve tal cual.
-    func gameFiles(_ g: FBGame) async throws -> [URL] {
+    /// Lo que trae un juego descargado: archivos para construir, o una app de Mac ya construida (subida desde NX Build).
+    enum Contents: Equatable {
+        case gameFiles([URL])
+        case apps(folder: URL, apps: [URL])
+    }
+
+    /// Descomprime el zip en ~/NX Build/<título> (si no estaba ya) y mira qué hay dentro: apps de juego construidas
+    /// (se usan tal cual) o NSP/NSZ/XCI/XCZ (para construir). Un descargable que ya sea un NSP se devuelve tal cual.
+    func contents(_ g: FBGame) async throws -> Contents {
         if let x = extracted(g), !isOutdated(g) {
+            let apps = Self.findApps(in: x)
+            if !apps.isEmpty { return .apps(folder: x, apps: apps) }
             let found = Self.findGameFiles(in: x)
-            if !found.isEmpty { return found }
+            if !found.isEmpty { return .gameFiles(found) }
         }
         guard let z = zip(g) else { throw Filebox.Failure.http(0, "no está descargado") }
-        if GameFile.isGameFile(z) { return [z] }
+        if GameFile.isGameFile(z) { return .gameFiles([z]) }
         let id = g.id
         states[id] = .extracting
         defer { if states[id] == .extracting { states[id] = nil } }
@@ -323,14 +331,21 @@ final class FileboxDownloads {
             try? fm.removeItem(at: dest)
             try fm.moveItem(at: tmp, to: dest)
         }.value
-        let found = Self.findGameFiles(in: dest)
-        guard !found.isEmpty else {
-            throw Filebox.Failure.http(0, "el zip no contiene ningún NSP, NSZ, XCI ni XCZ (está en \(dest.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")))")
-        }
         index[id]?.extracted = dest.path
         if deleteZipAfterExtract { try? FileManager.default.removeItem(at: z) }
         saveIndex()
-        return found
+        let apps = Self.findApps(in: dest)
+        if !apps.isEmpty { return .apps(folder: dest, apps: apps) }
+        let found = Self.findGameFiles(in: dest)
+        guard !found.isEmpty else {
+            throw Filebox.Failure.http(0, "el zip no contiene ningún juego (ni app de Mac ni NSP, NSZ, XCI o XCZ); está en \(dest.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
+        }
+        return .gameFiles(found)
+    }
+
+    /// Apps de juego de nxnative hasta 2 niveles por debajo.
+    nonisolated static func findApps(in dir: URL) -> [URL] {
+        GameLibrary.scan([dir.path], maxDepth: 2).map(\.url)
     }
 
     /// NSP/NSZ/XCI/XCZ hasta 3 niveles por debajo (sin entrar en apps ni carpetas ocultas o de build).

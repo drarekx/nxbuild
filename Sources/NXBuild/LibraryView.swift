@@ -19,6 +19,8 @@ struct CloudStatus {
 struct LibraryView: View {
     @Environment(GameLibrary.self) private var library
     @Environment(AppSettings.self) private var settings
+    @Environment(FileboxUploads.self) private var uploads
+    @Environment(FileboxStore.self) private var filebox
     @Binding var showBuild: Bool
     var startWith: String? = nil      // juego elegido al abrir (desde el inicio)
     var playOnAppear = false          // y jugarlo (p. ej. para pedir permiso si está en cuarentena)
@@ -237,6 +239,8 @@ struct LibraryView: View {
             Button("Opciones de lanzamiento…") { optionsFor = g }.disabled(!g.hasLaunchSettings)
             Button("Partidas en la nube…") { cloudFor = g }
             if g.isQuarantined { Button("Permitir abrir") { allow(g, thenPlay: false) }.disabled(busy != nil) }
+            Button("Subir a Filebox") { selected = g.id; uploads.upload(g, store: filebox) }
+                .disabled(!filebox.isConfigured || uploads.state(g)?.isActive == true)
             Divider()
             Button("Mostrar en Finder") { NSWorkspace.shared.activateFileViewerSelecting([g.url]) }
         }
@@ -272,6 +276,7 @@ struct LibraryView: View {
                         .disabled(!g.hasLaunchSettings)
                         .accessibilityLabel("Opciones de lanzamiento")
                 }
+                FileboxUploadPanel(game: g)
                 if quarantined {
                     VStack(alignment: .leading, spacing: 8) {
                         NoteCallout(text: "Copiado de otro Mac: macOS lo ha marcado como descargado y no deja abrirlo porque no está notarizado por Apple.")

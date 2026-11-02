@@ -10,6 +10,7 @@ struct NXBuildApp: App {
     @State private var filebox = FileboxStore()
     @State private var downloads = FileboxDownloads()
     @State private var inbox = BuildInbox()
+    @State private var uploads = FileboxUploads()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
@@ -22,6 +23,7 @@ struct NXBuildApp: App {
                 .environment(filebox)
                 .environment(downloads)
                 .environment(inbox)
+                .environment(uploads)
                 .frame(minWidth: 1060, minHeight: 720)
         }
         .windowStyle(.hiddenTitleBar)
@@ -46,6 +48,7 @@ struct NXBuildApp: App {
                 .environment(settings)
                 .environment(filebox)
                 .environment(downloads)
+                .environment(uploads)
         }
     }
 }

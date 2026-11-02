@@ -167,6 +167,7 @@ struct HomeView: View {
     @Environment(BuildRunner.self) private var runner
     @Environment(FileboxDownloads.self) private var downloads
     @Environment(FileboxStore.self) private var store
+    @Environment(FileboxUploads.self) private var uploads
     @Environment(\.openSettings) private var openSettings
     @State private var focus = 0
     @State private var optionsFor: LibraryGame?
@@ -255,6 +256,14 @@ struct HomeView: View {
                         Label("\(active) descarga\(active == 1 ? "" : "s")", systemImage: "arrow.down.circle")
                     }.buttonStyle(.plain)
                 }
+                if uploads.activeCount > 0 {
+                    Button { openLibrary(uploads.states.first { $0.value.isActive }?.key, false) } label: {
+                        let first = uploads.states.values.first { $0.isActive }
+                        Label(uploads.activeCount == 1 ? "Filebox: \(first?.short ?? "")"
+                                                       : "\(uploads.activeCount) subidas · \(first?.short ?? "")",
+                              systemImage: "arrow.up.circle").monospacedDigit()
+                    }.buttonStyle(.plain)
+                }
                 if runner.isRunning {
                     Button { open(.build) } label: { Label("Construyendo", systemImage: "hammer") }.buttonStyle(.plain)
                 }
@@ -296,6 +305,8 @@ struct HomeView: View {
                                 Button("Opciones de lanzamiento…") { optionsFor = g }.disabled(!g.hasLaunchSettings)
                                 Button("Partidas en la nube…") { cloudFor = g }
                                 Button("Ver en la biblioteca") { openLibrary(g.id, false) }
+                                Button("Subir a Filebox") { uploads.upload(g, store: store); openLibrary(g.id, false) }
+                                    .disabled(!store.isConfigured || uploads.state(g)?.isActive == true)
                                 Picker("Portada", selection: Binding(get: { Covers.shared.choice(for: g) },
                                                                      set: { Covers.shared.set($0, for: g) })) {
                                     ForEach(Covers.Source.allCases) { Text($0.label).tag($0) }

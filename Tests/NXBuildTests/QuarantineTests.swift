@@ -68,4 +68,6 @@ struct QuarantineTests {
 final class Counter: @unchecked Sendable {
     private let lock = NSLock(); private var n = 0
     func add() { lock.lock(); n += 1; lock.unlock() }
+    func set(_ v: Int) { lock.lock(); n = v; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
 }

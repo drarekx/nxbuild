@@ -13,6 +13,7 @@ struct CollectionView: View {
     @State private var filter = Filter.all
     @State private var showSettings = false
     @State private var error: String?
+    @State private var notice: String?
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "Todos", missing = "No los tengo", downloaded = "Descargados"
@@ -90,6 +91,9 @@ struct CollectionView: View {
         .alert("No se pudo preparar la build", isPresented: .constant(error != nil)) {
             Button("OK") { error = nil }
         } message: { Text(error ?? "") }
+        .alert("Instalado", isPresented: .constant(notice != nil)) {
+            Button("OK") { notice = nil }
+        } message: { Text(notice ?? "") }
     }
 
     private var header: some View {
@@ -152,15 +156,25 @@ struct CollectionView: View {
             if downloads.zip(g) == nil, downloads.extracted(g) == nil, downloads.states[g.id] == nil {
                 Button("Descargar") { downloads.start(g, store: store) }
             }
-            if isLocal(g) { Button("Construir…") { build(g) } }
+            if isLocal(g) { Button(g.isMacBuild ? "Instalar en la biblioteca" : "Construir…") { build(g) } }
         }
     }
 
+    /// Construir con los archivos del juego o, si el zip trae una app ya construida, añadirla a la biblioteca.
     private func build(_ g: FBGame) {
         Task {
             do {
-                inbox.pending = try await downloads.gameFiles(g)
-                showBuild = true
+                switch try await downloads.contents(g) {
+                case .gameFiles(let files):
+                    inbox.pending = files
+                    showBuild = true
+                case .apps(let folder, let apps):
+                    library.addFolder(folder.path)
+                    await library.refresh()
+                    // Descargada con URLSession no lleva cuarentena, pero por si el zip la traía dentro.
+                    for a in apps where Quarantine.isSet(a.path) { try? await Quarantine.remove(from: a.path) }
+                    notice = "«\(g.title)» ya está en tu biblioteca: búscalo en Inicio."
+                }
             } catch { self.error = error.localizedDescription }
         }
     }
@@ -268,7 +282,8 @@ struct CollectionDetail: View {
                 let local = downloads.zip(g) != nil || downloads.extracted(g) != nil
                 if local {
                     Button(action: build) {
-                        Label("Construir", systemImage: "hammer.fill").font(.headline).frame(maxWidth: .infinity, minHeight: 30)
+                        Label(g.isMacBuild ? "Instalar en la biblioteca" : "Construir",
+                              systemImage: g.isMacBuild ? "square.and.arrow.down.fill" : "hammer.fill").font(.headline).frame(maxWidth: .infinity, minHeight: 30)
                     }
                     .buttonStyle(.borderedProminent).controlSize(.large)
                     if downloads.isOutdated(g) {
@@ -352,6 +367,9 @@ final class ImageCache {
 struct FileboxSettingsForm: View {
     @Environment(FileboxStore.self) private var store
     @Environment(FileboxDownloads.self) private var downloads
+    @Environment(FileboxUploads.self) private var uploads
+    @State private var shareTest: (ok: Bool, text: String)?
+    @State private var testingShare = false
     @State private var base = ""
     @State private var token = ""
     @State private var testing = false
@@ -388,6 +406,40 @@ struct FileboxSettingsForm: View {
         Section("Descargas") {
             PathField(title: "Carpeta de descargas", path: $d.folder, mode: .folder, ok: nil)
             Toggle("Borrar el .zip al descomprimirlo para construir", isOn: $d.deleteZipAfterExtract)
+        }
+        Section("Subir juegos construidos") {
+            @Bindable var u = uploads
+            LabeledContent("Carpeta compartida") {
+                TextField(FileboxUploads.defaultShare, text: $u.shareURL).textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+            }
+            LabeledContent("Carpeta de entrada") {
+                TextField("entrada", text: $u.inboxName).textFieldStyle(.roundedBorder)
+            }
+            LabeledContent("Subcarpeta dentro de entrada") {
+                TextField("(ninguna)", text: $u.subfolder).textFieldStyle(.roundedBorder)
+            }
+            Toggle("Borrar el .zip de este Mac cuando Filebox lo haya importado", isOn: $u.deleteZipAfter)
+            Text("Subir a Filebox comprime la app en ~/NX Build/Subidas, la copia por la red a la carpeta de entrada y le pide a Filebox que la importe (el token necesita permiso games:write). Si el recurso no está montado, macOS pide la contraseña.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button(testingShare ? "Probando…" : "Probar la carpeta") {
+                    testingShare = true; shareTest = nil
+                    Task {
+                        defer { testingShare = false }
+                        do { shareTest = (true, "Lista: " + (try await uploads.test())) }
+                        catch is CancellationError {}
+                        catch { shareTest = (false, error.localizedDescription) }
+                    }
+                }
+                .disabled(testingShare)
+                Spacer()
+                if let r = shareTest {
+                    Label(r.text, systemImage: r.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(r.ok ? .green : .orange).font(.callout)
+                        .lineLimit(3).truncationMode(.middle).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         .onAppear { base = store.baseURL }
     }

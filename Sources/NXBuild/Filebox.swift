@@ -21,6 +21,11 @@ struct FBGame: Codable, Identifiable, Equatable, Sendable {
     var updatedAt: String
 }
 
+extension FBGame {
+    /// Una app de Mac ya construida y subida desde NX Build («<juego> (Mac).zip»), no los archivos para construirla.
+    var isMacBuild: Bool { file.name.hasSuffix("(Mac).zip") }
+}
+
 struct FBFile: Codable, Equatable, Sendable {
     var name: String
     var size: Int64
@@ -128,22 +133,55 @@ struct FileboxClient: Sendable {
         return out
     }
 
-    private func get<T: Decodable>(_ url: URL) async throws -> T {
+    private func get<T: Decodable>(_ url: URL) async throws -> T { try await send(url) }
+
+    /// Importar un juego ya copiado a la carpeta `entrada` del recurso compartido: el servidor calcula el sha256, lo mueve
+    /// a su sitio y crea el juego. Responde enseguida (202) con el estado `transferring`.
+    func startImport(path: String, size: Int64?, sha256: String?) async throws -> FBImport {
+        var body: [String: Any] = ["path": path]
+        if let size { body["size"] = size }
+        if let sha256 { body["sha256"] = sha256 }
+        return try await send(base.appendingPathComponent("v1/imports"), method: "POST",
+                              body: try JSONSerialization.data(withJSONObject: body))
+    }
+
+    func importStatus(_ id: String) async throws -> FBImport {
+        try await send(base.appendingPathComponent("v1/imports").appendingPathComponent(id))
+    }
+
+    private func send<T: Decodable>(_ url: URL, method: String = "GET", body: Data? = nil) async throws -> T {
         var r = URLRequest(url: url, timeoutInterval: 30)
+        r.httpMethod = method
         r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         r.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let body { r.httpBody = body; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, resp): (Data, URLResponse)
         do { (data, resp) = try await session.data(for: r) }
         catch { throw Filebox.Failure.offline(error.localizedDescription) }
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if code == 401 { throw Filebox.Failure.unauthorized }
         guard (200..<300).contains(code) else {
-            let msg = (try? JSONDecoder().decode([String: AnyCodable].self, from: data))?["message"]?.text ?? ""
+            let json = try? JSONDecoder().decode([String: AnyCodable].self, from: data)
+            var msg = json?["message"]?.text ?? ""
+            if code == 403 && msg.isEmpty { msg = "el token no tiene permiso para subir juegos (games:write)" }
+            if code == 409 && msg.isEmpty { msg = "ese archivo ya se está importando" }
             throw Filebox.Failure.http(code, msg)
         }
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw Filebox.Failure.decoding(String(describing: error).prefix(300).description) }
     }
+}
+
+/// Estado de una importación (ImportData).
+struct FBImport: Codable, Equatable, Sendable {
+    var id: String
+    var name: String
+    var size: Int64
+    var status: String          // transferring, ready, failed
+    var progress: Int           // % del sha256 calculado en el NAS
+    var failureReason: String?
+    var sha256: String?
+    var gameId: String?
 }
 
 /// Solo para leer «message» de un error JSON sin conocer el resto.

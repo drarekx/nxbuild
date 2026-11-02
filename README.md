@@ -32,6 +32,7 @@ La app busca versiones nuevas al abrirse y una vez al día; también en **NX Bui
 - **Build en curso**: etapas, progreso, tiempo restante y log; aviso en el Dock y notificación al terminar. Cancelar para todo el grupo de procesos.
 - **Errores**: clasifica los mensajes del script y ofrece el arreglo (abrir Dependencias, reintentar con el permiso adecuado, copiar un diagnóstico sin claves ni rutas personales).
 - **Partidas en la nube**: elige la carpeta (iCloud Drive) por la que cada juego sincroniza su partida con otro Mac o el iPhone.
+- **Colección (Filebox)**: conecta con la API de Filebox (dirección + token de API, guardado en un archivo 0600), muestra la colección con portadas, busca y filtra, descarga los .zip con reanudación (Range), comprueba el SHA-256, los descomprime y abre la build con los NSP/XCI de dentro.
 - **Juegos copiados de otro Mac**: detecta la marca de cuarentena que pone macOS (AirDrop, descargas) y la quita con **Permitir abrir** (pide la contraseña de administrador si los archivos son de solo lectura o de otro usuario). Si macOS lo impide por la protección **Gestión de apps**, ofrece una copia limpia en `~/Applications` (rsync, nace sin la marca) o dar ese permiso a NX Build en Ajustes, sin tocar la firma; avisa si el juego pide una versión de macOS más nueva que la del Mac.
 - **Liberar espacio**: borra lo que la siguiente build vuelve a generar.
 

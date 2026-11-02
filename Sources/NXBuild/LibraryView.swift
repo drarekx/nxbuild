@@ -468,6 +468,9 @@ struct RootView: View {
             Tab("Biblioteca", systemImage: "square.grid.2x2", value: "library") {
                 LibraryView(showBuild: Binding(get: { tab == "build" }, set: { if $0 { tab = "build" } }))
             }
+            Tab("Colección", systemImage: "shippingbox", value: "collection") {
+                CollectionView(showBuild: Binding(get: { tab == "build" }, set: { if $0 { tab = "build" } }))
+            }
             Tab(runner.isRunning ? "Construyendo…" : "Nueva build", systemImage: runner.isRunning ? "gearshape.2" : "hammer", value: "build") {
                 ContentView()
             }

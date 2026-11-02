@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var keyChecking = false
     @State private var cloud: CloudFolder.Info?
     @State private var buildLocally = false
+    @Environment(BuildInbox.self) private var inbox
 
     var body: some View {
         HSplitView {
@@ -177,6 +178,13 @@ struct ContentView: View {
         .dropDestination(for: URL.self) { urls, _ in
             handleDrop(urls)
         } isTargeted: { dropTargeted = $0 }
+        // Un juego descargado de Filebox llega aquí como si se hubiera soltado (empieza una selección nueva).
+        .onChange(of: inbox.pending, initial: true) { _, urls in
+            guard let urls, !runner.isRunning else { return }
+            inbox.pending = nil
+            selection = nil
+            _ = handleDrop(urls)
+        }
     }
 
     /// Los archivos del juego elegido, por papel. En una carpeta hecha con enlaces (archivos sueltos) se pueden quitar.

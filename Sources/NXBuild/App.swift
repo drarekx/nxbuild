@@ -7,6 +7,9 @@ struct NXBuildApp: App {
     @State private var runner = BuildRunner()
     @State private var deps = Dependencies()
     @State private var library = GameLibrary()
+    @State private var filebox = FileboxStore()
+    @State private var downloads = FileboxDownloads()
+    @State private var inbox = BuildInbox()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
@@ -16,6 +19,9 @@ struct NXBuildApp: App {
                 .environment(runner)
                 .environment(deps)
                 .environment(library)
+                .environment(filebox)
+                .environment(downloads)
+                .environment(inbox)
                 .frame(minWidth: 820, minHeight: 620)
         }
         .windowResizability(.contentMinSize)
@@ -37,6 +43,8 @@ struct NXBuildApp: App {
         Settings {
             SettingsView()
                 .environment(settings)
+                .environment(filebox)
+                .environment(downloads)
         }
     }
 }
@@ -83,6 +91,7 @@ struct SettingsView: View {
             PathField(title: "Carpeta inicial al elegir juego", path: $s.defaultBrowseDir, mode: .folder, ok: nil)
             Toggle("Avisar al terminar una build (si la app no está delante)", isOn: $s.notifyOnFinish)
             Toggle("Jugar sin la ventana de ajustes del juego (las opciones se eligen aquí)", isOn: $s.skipGameWindow)
+            FileboxSettingsForm()
             Section("Actualizaciones") {
                 Toggle("Buscar actualizaciones automáticamente", isOn: Binding(get: { Updater.shared.autoCheck },
                                                                                 set: { Updater.shared.autoCheck = $0 }))

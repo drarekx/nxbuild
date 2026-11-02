@@ -42,7 +42,8 @@ struct QuarantineTests {
         #expect(!Quarantine.isSet(copy))
         #expect(!Quarantine.isSet(copy + "/Contents/MacOS/nxnative"))
         #expect(FileManager.default.isExecutableFile(atPath: copy + "/Contents/MacOS/nxnative"))
-        #expect(Quarantine.isSet(app.path))   // el original no se toca
+        #expect(Quarantine.isSet(app.path))   // el original no se toca (ni por enlaces duros)
+        #expect(Quarantine.isSet(exe.path))
         let second = try await Quarantine.cleanCopy(of: app.path, into: out)
         #expect(second == out + "/Juego 2.app")
     }

@@ -28,7 +28,8 @@ struct LibraryView: View {
     @State private var refreshTick = 0   // repinta estados tras cerrar una hoja
     @State private var allowFor: LibraryGame?   // pide permiso para quitar la marca de cuarentena y jugar
     @State private var copyOffer: (game: LibraryGame, why: String)?   // no se pudo quitar: ofrecer copia limpia
-    @State private var copying: String?          // path del juego que se está copiando
+    @State private var busy: Busy?               // quitando la marca o copiando: qué juego, qué paso, cuánto
+    struct Busy { var path: String; var text: String; var fraction: Double? }
     private static let appsFolder = NSHomeDirectory() + "/Applications"
 
     private var shown: [LibraryGame] {
@@ -136,11 +137,17 @@ struct LibraryView: View {
 
     /// Quita la marca de cuarentena (Quarantine.remove) y, si se pide, abre el juego.
     private func allow(_ g: LibraryGame, thenPlay: Bool) {
+        guard busy == nil else { return }
+        selected = g.id
+        busy = Busy(path: g.path, text: "Quitando la marca…")
         Task {
+            defer { busy = nil }
             do {
-                try await Quarantine.remove(from: g.path)
+                try await Quarantine.remove(from: g.path) { text in
+                    Task { @MainActor in if busy?.path == g.path { busy?.text = text } }
+                }
                 refreshTick += 1
-                if thenPlay { play(g) }
+                if thenPlay { busy = nil; play(g) }
             } catch Quarantine.Failure.cancelled {
                 // el usuario canceló la contraseña: nada que avisar
             } catch {
@@ -151,11 +158,15 @@ struct LibraryView: View {
 
     /// Copia limpia en ~/Applications, la añade a la biblioteca y la selecciona.
     private func cleanCopy(_ g: LibraryGame) {
-        copying = g.path
+        guard busy == nil else { return }
+        selected = g.id
+        busy = Busy(path: g.path, text: "Copiando a ~/Applications…", fraction: 0)
         Task {
-            defer { copying = nil }
+            defer { busy = nil }
             do {
-                let dest = try await Quarantine.cleanCopy(of: g.path, into: Self.appsFolder)
+                let dest = try await Quarantine.cleanCopy(of: g.path, into: Self.appsFolder) { f in
+                    Task { @MainActor in if busy?.path == g.path { busy?.fraction = f } }
+                }
                 if !library.folders.contains(Self.appsFolder) { library.addFolder(Self.appsFolder) }
                 await library.refresh()
                 selected = dest
@@ -181,7 +192,9 @@ struct LibraryView: View {
                 .aspectRatio(4 / 3, contentMode: .fit)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(g.titleID).font(.caption.monospaced()).foregroundStyle(.secondary)
-                    if g.isQuarantined {
+                    if busy?.path == g.path {
+                        StatusTag(text: "Trabajando…", color: .egluuText)
+                    } else if g.isQuarantined {
                         StatusTag(text: "Bloqueado por macOS", color: .orange)
                     } else {
                         StatusTag(text: cloud.tag, color: cloud.color)
@@ -200,7 +213,7 @@ struct LibraryView: View {
             Button("Jugar") { play(g) }
             Button("Opciones de lanzamiento…") { optionsFor = g }.disabled(!g.hasLaunchSettings)
             Button("Partidas en la nube…") { cloudFor = g }
-            if g.isQuarantined { Button("Permitir abrir") { allow(g, thenPlay: false) } }
+            if g.isQuarantined { Button("Permitir abrir") { allow(g, thenPlay: false) }.disabled(busy != nil) }
             Divider()
             Button("Mostrar en Finder") { NSWorkspace.shared.activateFileViewerSelecting([g.url]) }
         }
@@ -239,8 +252,16 @@ struct LibraryView: View {
                 if quarantined {
                     VStack(alignment: .leading, spacing: 8) {
                         NoteCallout(text: "Copiado de otro Mac: macOS lo ha marcado como descargado y no deja abrirlo porque no está notarizado por Apple.")
-                        if copying == g.path {
-                            ProgressView("Copiando a ~/Applications…").controlSize(.small)
+                        if let b = busy, b.path == g.path {
+                            if let f = b.fraction {
+                                ProgressView(value: f) {
+                                    Text(b.text).font(.callout)
+                                } currentValueLabel: {
+                                    Text(f.formatted(.percent.precision(.fractionLength(0)))).font(.caption.monospaced())
+                                }
+                            } else {
+                                HStack(spacing: 8) { ProgressView().controlSize(.small); Text(b.text).font(.callout) }
+                            }
                         } else {
                             Button("Permitir abrir") { allow(g, thenPlay: false) }
                                 .help("Quita la marca com.apple.quarantine de esta copia (xattr -dr)")

@@ -13,6 +13,7 @@ final class FileboxUploads {
         case mounting
         case zipping(done: Int64, total: Int64)
         case copying(done: Int64, total: Int64, bytesPerSecond: Double)
+        case verifying(Double)      // el zip ya estaba en el NAS: calculando su sha256 aquí
         case importing(Int)
         case done(String?)          // id del juego en Filebox
         case failed(String)
@@ -23,6 +24,7 @@ final class FileboxUploads {
             case .mounting: "conectando"
             case .zipping(let d, let t): "comprimiendo \(t > 0 ? Int(Double(d) * 100 / Double(t)) : 0) %"
             case .copying(let d, let t, _): "subiendo \(t > 0 ? Int(Double(d) * 100 / Double(t)) : 0) %"
+            case .verifying(let f): "comprobando \(Int(f * 100)) %"
             case .importing(let p): "importando \(p) %"
             case .done: "subido"
             case .failed: "error"
@@ -108,8 +110,15 @@ final class FileboxUploads {
                 // 3. Copiar al NAS calculando el sha256 a la vez.
                 let total = (try? z.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init) ?? 0
                 states[key] = .copying(done: 0, total: total, bytesPerSecond: 0)
-                let sha = try await Self.copy(z, to: target) { n in
-                    Task { @MainActor in self.copied(key, n, total) }
+                let sha: String
+                if let size = (try? target.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, Int64(size) == total {
+                    // Ya está entero en `entrada` (un intento anterior que no llegó a importar): solo el sha256 local.
+                    states[key] = .verifying(0)
+                    sha = try await Task.detached { try sha256(of: z) { f in Task { @MainActor in self.states[key] = .verifying(f) } } }.value
+                } else {
+                    sha = try await Self.copy(z, to: target) { n in
+                        Task { @MainActor in self.copied(key, n, total) }
+                    }
                 }
 
                 // 4. Importar y esperar a que el servidor lo deje listo.
@@ -255,6 +264,9 @@ final class FileboxUploads {
             }
             let input = try FileHandle(forReadingFrom: src)
             let output = try FileHandle(forWritingTo: part)
+            // Sin caché: si no, macOS guarda en memoria lo escrito y lo manda al NAS después; la barra llegaba al 100 %
+            // mucho antes que los datos y el cierre se quedaba minutos vaciando la caché.
+            _ = fcntl(output.fileDescriptor, F_NOCACHE, 1)
             var hasher = SHA256()
             var done: Int64 = 0, last = Date.distantPast
             do {
@@ -397,6 +409,9 @@ struct FileboxUploadPanel: View {
                     Spacer()
                     cancel
                 }
+            case .verifying(let f)?:
+                step("Ya estaba subido: calculando su SHA-256 · \(Int(f * 100)) %", f)
+                cancel
             case .importing(let p)?:
                 step("Filebox lo está importando (comprueba el SHA-256) · \(p) %", Double(p) / 100)
                 Text("Si cancelas aquí, el servidor termina la importación igualmente.").font(.caption).foregroundStyle(.secondary)

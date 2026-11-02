@@ -139,6 +139,12 @@ final class GameLibrary {
         _ = try await NSWorkspace.shared.openApplication(at: g.url, configuration: cfg)
     }
 
+    /// A la Papelera (se puede recuperar). Las partidas no se tocan: están en ~/Library/Application Support/nxnative.
+    func trash(_ g: LibraryGame) async throws {
+        _ = try await NSWorkspace.shared.recycle([g.url])
+        await refresh()
+    }
+
     func isRunning(_ g: LibraryGame) -> Bool {
         NSRunningApplication.runningApplications(withBundleIdentifier: g.bundleID).contains { !$0.isTerminated }
     }

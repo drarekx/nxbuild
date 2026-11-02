@@ -17,7 +17,7 @@ extension Color {
 /// Solo cuenta con NX Build activa: con un juego abierto, el mando es del juego.
 @MainActor @Observable
 final class Gamepad {
-    enum Button: Equatable { case left, right, up, down, a, b, x, y, plus }
+    enum Button: Equatable { case left, right, up, down, a, b, x, y, plus, minus }
     struct Event: Equatable { let button: Button; let id = UUID() }
 
     static let shared = Gamepad()
@@ -55,6 +55,7 @@ final class Gamepad {
         on(pad.leftThumbstick.up, .up); on(pad.leftThumbstick.down, .down)
         on(pad.buttonA, .a); on(pad.buttonB, .b); on(pad.buttonX, .x); on(pad.buttonY, .y)
         on(pad.buttonMenu, .plus)
+        if let o = pad.buttonOptions { on(o, .minus) }
     }
 
     private func send(_ b: Button) {
@@ -168,8 +169,10 @@ struct HomeView: View {
     @Environment(FileboxDownloads.self) private var downloads
     @Environment(FileboxStore.self) private var store
     @Environment(FileboxUploads.self) private var uploads
+    @Environment(BuildInbox.self) private var inbox
     @Environment(\.openSettings) private var openSettings
     @State private var focus = 0
+    @State private var trashFor: LibraryGame?
     @State private var optionsFor: LibraryGame?
     @State private var cloudFor: LibraryGame?
     @State private var error: String?
@@ -178,8 +181,34 @@ struct HomeView: View {
     @FocusState private var keys: Bool
     private let pad = Gamepad.shared
 
+    /// Un juego del carrusel: instalado en este Mac, o en Filebox y no instalado (se descarga desde aquí).
+    enum Item: Identifiable {
+        case installed(LibraryGame)
+        case filebox(FBGame)
+        var id: String {
+            switch self {
+            case .installed(let g): "i:" + g.id
+            case .filebox(let f): "f:" + f.id
+            }
+        }
+    }
+
     private var games: [LibraryGame] { library.games }
-    private var current: LibraryGame? { games.indices.contains(focus) ? games[focus] : nil }
+    /// Los de Filebox que no están en la biblioteca, uno por juego (la app de Mac antes que los archivos para construir).
+    private var remoteOnly: [FBGame] {
+        guard store.isConfigured else { return [] }
+        var best: [String: FBGame] = [:]
+        for g in store.games where GameMatch.inLibrary(g, games) == nil {
+            let k = g.resolvedTitleID ?? GameMatch.nameKey(g.title)
+            if let old = best[k], old.isMacBuild || !g.isMacBuild { continue }
+            best[k] = g
+        }
+        return best.values.sorted { $0.displayTitle.localizedStandardCompare($1.displayTitle) == .orderedAscending }
+    }
+    private var items: [Item] { games.map(Item.installed) + remoteOnly.map(Item.filebox) }
+    private var currentItem: Item? { let all = items; return all.indices.contains(focus) ? all[focus] : nil }
+    private var current: LibraryGame? { if case .installed(let g)? = currentItem { g } else { nil } }
+    private var currentRemote: FBGame? { if case .filebox(let f)? = currentItem { f } else { nil } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -196,11 +225,13 @@ struct HomeView: View {
         .onAppear { keys = true }
         .onKeyPress(.leftArrow) { move(-1); return .handled }
         .onKeyPress(.rightArrow) { move(1); return .handled }
-        .onKeyPress(.return) { if let g = current { play(g) }; return .handled }
-        .onKeyPress(characters: CharacterSet(charactersIn: "xXyY+")) { k in
+        .onKeyPress(.return) { activate(); return .handled }
+        .onKeyPress(.delete) { if let g = current { trashFor = g }; return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "xXyY+-")) { k in
             switch k.characters.lowercased() {
-            case "x": if let g = current, g.hasLaunchSettings { optionsFor = g }
+            case "x": secondary()
             case "y": openLog()
+            case "-": if let g = current { trashFor = g }
             default: open(.build)
             }
             return .handled
@@ -209,8 +240,9 @@ struct HomeView: View {
             switch e?.button {
             case .left: move(-1)
             case .right: move(1)
-            case .a: if let g = current { play(g) } else if games.isEmpty { open(.build) }
-            case .x: if let g = current, g.hasLaunchSettings { optionsFor = g }
+            case .a: if currentItem != nil { activate() } else { open(.build) }
+            case .x: secondary()
+            case .minus: if let g = current { trashFor = g }
             case .y: openLog()
             case .plus: open(.build)
             case .down: openLibrary(current?.id, false)
@@ -224,9 +256,25 @@ struct HomeView: View {
             if store.isConfigured, Covers.shared.preferFilebox || !Covers.shared.overrides.isEmpty,
                (store.lastSync ?? .distantPast) < Date().addingTimeInterval(-3600) { await store.refresh() }
         }
-        .onChange(of: games.count) { _, n in focus = min(focus, max(0, n - 1)) }
+        .onChange(of: items.count) { _, n in focus = min(focus, max(0, n - 1)) }
         .sheet(item: $optionsFor) { g in LaunchOptionsView(game: g) }
         .sheet(item: $cloudFor) { g in CloudSavesView(game: g) }
+        .alert("¿Borrar «\(trashFor?.name ?? "")» de este Mac?", isPresented: .constant(trashFor != nil), presenting: trashFor) { g in
+            Button("Mover a la Papelera", role: .destructive) {
+                trashFor = nil
+                Task {
+                    do { try await library.trash(g) } catch { self.error = error.localizedDescription }
+                }
+            }
+            Button("Cancelar", role: .cancel) { trashFor = nil }
+        } message: { g in
+            let p = GameMatch.presence(of: g, in: store.games)
+            Text(p.macBuild != nil
+                 ? "La app va a la Papelera. Está en Filebox: puedes volver a descargarla cuando quieras. Las partidas se quedan."
+                 : p.sources != nil
+                    ? "La app va a la Papelera. En Filebox solo están los archivos del juego: para volver a jugar habrá que construirlo otra vez. Las partidas se quedan."
+                    : "La app va a la Papelera. No está en Filebox: para volver a jugar habrá que construirlo otra vez. Las partidas se quedan.")
+        }
         .alert("No se pudo abrir el juego", isPresented: .constant(error != nil)) {
             Button("OK") { error = nil }
         } message: { Text(error ?? "") }
@@ -292,12 +340,47 @@ struct HomeView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .bottom, spacing: 22) {
-                    if games.isEmpty {
+                    if items.isEmpty {
                         emptyTile
                     }
-                    ForEach(Array(games.enumerated()), id: \.element.id) { i, g in
+                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                        switch item {
+                        case .installed(let g): installedTile(g, i)
+                        case .filebox(let f): fileboxTile(f, i)
+                        }
+                    }
+                    allTile
+                }
+                .padding(.horizontal, 56).padding(.vertical, 16)
+            }
+            .scrollClipDisabled()
+            .onChange(of: focus) { _, i in
+                let all = items
+                guard all.indices.contains(i) else { return }
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(all[i].id, anchor: .center) }
+            }
+        }
+        .frame(height: 360)
+    }
+
+    private func fileboxTile(_ f: FBGame, _ i: Int) -> some View {
+        RemoteGameTile(game: f, focused: i == focus, state: downloads.states[f.id])
+            .id(Item.filebox(f).id)
+            .onTapGesture(count: 2) { focus = i; fetch(f) }
+            .onTapGesture { focus = i }
+            .contextMenu {
+                if downloads.states[f.id] == nil {
+                    Button(f.isMacBuild ? "Descargar e instalar" : "Descargar y construir") { fetch(f) }
+                } else {
+                    Button("Pausar descarga") { downloads.pause(f) }
+                }
+                Button("Ver en la colección") { open(.collection) }
+            }
+    }
+
+    private func installedTile(_ g: LibraryGame, _ i: Int) -> some View {
                         GameTile(game: g, focused: i == focus, running: library.isRunning(g))
-                            .id(g.id)
+                            .id(Item.installed(g).id)
                             .onTapGesture(count: 2) { focus = i; play(g) }
                             .onTapGesture { focus = i }
                             .contextMenu {
@@ -313,8 +396,11 @@ struct HomeView: View {
                                 }
                                 Divider()
                                 Button("Mostrar en Finder") { NSWorkspace.shared.activateFileViewerSelecting([g.url]) }
+                                Button("Borrar de este Mac…", role: .destructive) { trashFor = g }
                             }
-                    }
+    }
+
+    private var allTile: some View {
                     Button { openLibrary(current?.id, false) } label: {
                         VStack(spacing: 10) {
                             Image(systemName: "square.grid.2x2").font(.system(size: 30))
@@ -327,16 +413,6 @@ struct HomeView: View {
                         .contentShape(RoundedRectangle(cornerRadius: 20))
                     }
                     .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 56).padding(.vertical, 16)
-            }
-            .scrollClipDisabled()
-            .onChange(of: focus) { _, i in
-                guard games.indices.contains(i) else { return }
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(games[i].id, anchor: .center) }
-            }
-        }
-        .frame(height: 360)
     }
 
     private var emptyTile: some View {
@@ -378,6 +454,24 @@ struct HomeView: View {
             .font(.system(size: 16, design: .rounded))
             .foregroundStyle(Color.consoleDim)
             .id("\(g.id)-\(optionsFor == nil)-\(cloudFor == nil)")
+        } else if let f = currentRemote {
+            HStack(spacing: 30) {
+                fact("Filebox", f.isMacBuild ? "app de Mac lista para jugar" : "archivos del juego (hay que construirlo)")
+                fact("Tamaño", f.file.size.formatted(.byteCount(style: .file)))
+                if let v = f.version, !v.isEmpty { fact("Versión", v) }
+                if let p = f.publisher, !p.isEmpty { fact("Editor", p) }
+                switch downloads.states[f.id] {
+                case .downloading(let d, let t, _)?:
+                    fact("Descargando", "\(t > 0 ? Int(Double(d) * 100 / Double(t)) : 0) %")
+                case .verifying?: fact("Descarga", "comprobando")
+                case .extracting?: fact("Descarga", "descomprimiendo")
+                case .failed(let m)?: Label(m, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).lineLimit(1)
+                case nil: if downloads.partial(f) > 0 { fact("Descarga", "en pausa") }
+                }
+                Spacer()
+            }
+            .font(.system(size: 16, design: .rounded))
+            .foregroundStyle(Color.consoleDim)
         }
     }
 
@@ -432,10 +526,19 @@ struct HomeView: View {
                 }
                 Spacer()
                 HStack(spacing: 24) {
-                    hint("A", "Jugar") { if let g = current { play(g) } }.disabled(current == nil)
-                    hint("X", "Opciones") { if let g = current { optionsFor = g } }.disabled(current?.hasLaunchSettings != true)
-                    hint("Y", "Log") { openLog() }
-                        .disabled(current.map { !FileManager.default.fileExists(atPath: $0.logURL.path) } ?? true)
+                    if let f = currentRemote {
+                        if downloads.states[f.id] == nil {
+                            hint("A", f.isMacBuild ? "Descargar e instalar" : "Descargar y construir") { fetch(f) }
+                        } else {
+                            hint("X", "Pausar") { downloads.pause(f) }
+                        }
+                    } else {
+                        hint("A", "Jugar") { if let g = current { play(g) } }.disabled(current == nil)
+                        hint("X", "Opciones") { if let g = current { optionsFor = g } }.disabled(current?.hasLaunchSettings != true)
+                        hint("Y", "Log") { openLog() }
+                            .disabled(current.map { !FileManager.default.fileExists(atPath: $0.logURL.path) } ?? true)
+                        hint("−", "Borrar") { if let g = current { trashFor = g } }.disabled(current == nil)
+                    }
                     hint("+", "Nueva build") { open(.build) }
                 }
             }
@@ -459,8 +562,41 @@ struct HomeView: View {
     // MARK: Acciones
 
     private func move(_ d: Int) {
-        guard !games.isEmpty else { return }
-        focus = min(max(0, focus + d), games.count - 1)
+        let n = items.count
+        guard n > 0 else { return }
+        focus = min(max(0, focus + d), n - 1)
+    }
+
+    /// A: jugar el instalado, o descargar el de Filebox.
+    private func activate() {
+        switch currentItem {
+        case .installed(let g)?: play(g)
+        case .filebox(let f)?: if downloads.states[f.id] == nil { fetch(f) }
+        case nil: break
+        }
+    }
+
+    /// X: opciones del instalado, o pausar la descarga.
+    private func secondary() {
+        if let g = current, g.hasLaunchSettings { optionsFor = g }
+        else if let f = currentRemote, downloads.states[f.id] != nil { downloads.pause(f) }
+    }
+
+    /// Descargar de Filebox: la app de Mac se instala en la biblioteca (y queda elegida); los archivos del juego van a
+    /// Nueva build.
+    private func fetch(_ f: FBGame) {
+        Task {
+            do {
+                switch try await downloads.fetchAndOpen(f, store: store, library: library) {
+                case .apps?:
+                    if let i = items.firstIndex(where: { if case .installed(let g) = $0 { GameMatch.matches(g, f) } else { false } }) { focus = i }
+                case .gameFiles(let files)?:
+                    inbox.pending = files
+                    open(.build)
+                case nil: break
+                }
+            } catch { self.error = error.localizedDescription }
+        }
     }
 
     private func play(_ g: LibraryGame) {
@@ -597,5 +733,96 @@ struct RoundMenuButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .accessibilityLabel(label)
+    }
+}
+
+/// Un juego de Filebox que no está en este Mac: su portada apagada, la marca EN FILEBOX y, mientras baja, el avance.
+struct RemoteGameTile: View {
+    let game: FBGame
+    let focused: Bool
+    let state: FileboxDownloads.State?
+    @Environment(FileboxStore.self) private var store
+    @State private var image: NSImage?
+
+    var body: some View {
+        let size: CGFloat = focused ? 290 : 160
+        let radius: CGFloat = focused ? 26 : 20
+        VStack(spacing: 12) {
+            if focused {
+                Text(game.displayTitle)
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.consoleAccent).lineLimit(1).frame(width: 420)
+            }
+            ZStack(alignment: .bottomLeading) {
+                Group {
+                    if let image {
+                        Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+                    } else {
+                        Rectangle().fill(GameTile.color(for: game.resolvedTitleID ?? game.title))
+                    }
+                }
+                .saturation(state == nil ? 0.35 : 1).opacity(state == nil ? 0.6 : 1)
+                LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
+                VStack(alignment: .leading, spacing: 6) {
+                    badge
+                    if !focused || image == nil {
+                        Text(game.displayTitle)
+                            .font(.system(size: focused ? 26 : 15, weight: .heavy, design: .rounded))
+                            .foregroundStyle(.white).lineLimit(3).multilineTextAlignment(.leading)
+                    }
+                }
+                .padding(focused ? 22 : 14)
+                if let f = fraction {
+                    ZStack {
+                        Circle().stroke(.white.opacity(0.25), lineWidth: 6)
+                        Circle().trim(from: 0, to: f).stroke(Color.consoleAccent, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Text("\(Int(f * 100)) %").font(.system(size: 15, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                    }
+                    .frame(width: 64, height: 64)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: radius))
+            .overlay {
+                if focused {
+                    RoundedRectangle(cornerRadius: radius + 7).strokeBorder(Color.consoleAccent, lineWidth: 5).padding(-11)
+                } else {
+                    RoundedRectangle(cornerRadius: radius).strokeBorder(Color(white: 0.3), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: radius))
+        }
+        .animation(.spring(duration: 0.25), value: focused)
+        .task(id: game.cover?.url) {
+            guard let c = game.cover else { return }
+            image = await Covers.shared.remote(c, apiBase: store.baseURL)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(game.displayTitle), en Filebox")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var fraction: Double? {
+        switch state {
+        case .downloading(let d, let t, _)?: t > 0 ? Double(d) / Double(t) : 0
+        case .verifying(let f)?: f
+        default: nil
+        }
+    }
+
+    @ViewBuilder private var badge: some View {
+        let text: String = switch state {
+        case .downloading?: "DESCARGANDO"
+        case .verifying?: "COMPROBANDO"
+        case .extracting?: "DESCOMPRIMIENDO"
+        case .failed?: "ERROR"
+        case nil: game.isMacBuild ? "EN FILEBOX" : "EN FILEBOX · CONSTRUIR"
+        }
+        Text(text).font(.system(size: 11, weight: .heavy, design: .rounded)).tracking(1)
+            .foregroundStyle(Color.consoleOnAccent)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(state.map { if case .failed = $0 { Color.orange } else { Color.consoleAccent } } ?? Color.consoleText, in: Capsule())
     }
 }

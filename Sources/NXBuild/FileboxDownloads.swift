@@ -271,6 +271,26 @@ final class FileboxDownloads {
         states[id] = .downloading(done: done, total: total, bytesPerSecond: bps)
     }
 
+    /// Espera a que termine la descarga en curso de ese juego (si la hay).
+    func wait(_ g: FBGame) async { await tasks[g.id]?.value }
+
+    /// Descargar y dejarlo listo: si es una app de Mac ya construida, se instala en la biblioteca; si son los archivos
+    /// del juego, se devuelven para construirlo. nil si la descarga no terminó (pausada, cancelada o fallida).
+    func fetchAndOpen(_ g: FBGame, store: FileboxStore, library: GameLibrary) async throws -> Contents? {
+        if zip(g) == nil, extracted(g) == nil || isOutdated(g) {
+            start(g, store: store)
+            await wait(g)
+            guard zip(g) != nil else { return nil }
+        }
+        let c = try await contents(g)
+        if case .apps(let folder, let apps) = c {
+            library.addFolder(folder.path)
+            await library.refresh()
+            for a in apps where Quarantine.isSet(a.path) { try? await Quarantine.remove(from: a.path) }
+        }
+        return c
+    }
+
     /// Pausa: corta la descarga y deja el .part para continuar.
     func pause(_ g: FBGame) { tasks[g.id]?.cancel() }
 

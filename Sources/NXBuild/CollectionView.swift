@@ -151,7 +151,7 @@ struct CollectionView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            if downloads.zip(g) == nil, downloads.extracted(g) == nil, downloads.states[g.id] == nil {
+            if !inLibrary(g), downloads.zip(g) == nil, downloads.extracted(g) == nil, downloads.states[g.id] == nil {
                 Button("Descargar") { downloads.start(g, store: store) }
             }
             if isLocal(g) { Button(g.isMacBuild ? "Instalar en la biblioteca" : "Construir…") { build(g) } }
@@ -295,6 +295,9 @@ struct CollectionDetail: View {
                         Button("Borrar descarga", role: .destructive) { downloads.deleteLocal(g) }
                     }
                     .buttonStyle(.link)
+                } else if inLibrary {
+                    // Ya instalado: no se descarga otra vez (se puede borrar del Mac desde el inicio o la biblioteca).
+                    EmptyView()
                 } else {
                     let part = downloads.partial(g)
                     Button { downloads.start(g, store: store) } label: {

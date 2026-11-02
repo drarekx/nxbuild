@@ -204,6 +204,8 @@ final class FakeFilebox: URLProtocol, @unchecked Sendable {
         #expect(FileboxUploads.importPath(subfolder: "/Mac/x:y/", name: "a.zip") == "Mac/x_y/a.zip")
         let g = LibraryGame(path: "/x/J.app", name: "Zelda: TotK", titleID: "", bundleID: "", version: "", commit: "", builtAt: nil)
         #expect(FileboxUploads.zipName(for: g) == "Zelda_ TotK (Mac).zip")
+        let t = LibraryGame(path: "/x/J.app", name: "Zelda", titleID: "0100F2C0115B6000", bundleID: "", version: "", commit: "", builtAt: nil)
+        #expect(FileboxUploads.zipName(for: t) == "Zelda [0100F2C0115B6000] (Mac).zip")
     }
 
     @Test func zipsAppAndCopiesWithHash() async throws {
@@ -251,5 +253,36 @@ final class FakeFilebox: URLProtocol, @unchecked Sendable {
         let got = FileboxUploads.openFile(of: p.processIdentifier, under: FileboxUploads.realPath(d.path) + "/")
         #expect(got?.0.hasSuffix("datos.bin") == true)
         #expect(got?.1 == 200_000)
+    }
+}
+
+@Suite struct GameMatchTests {
+    func fb(_ title: String, tid: String? = nil, file: String? = nil) -> FBGame {
+        FBGame(id: UUID().uuidString, title: title, titleId: tid, version: nil, description: nil, publisher: nil, releaseDate: nil,
+               file: FBFile(name: file ?? title + ".zip", size: 1, mime: nil, sha256: nil, download: FBDownload(url: "", expiresAt: "")),
+               cover: nil, screenshots: [], createdAt: "", updatedAt: "")
+    }
+    func lib(_ name: String, _ tid: String) -> LibraryGame {
+        LibraryGame(path: "/x/\(name).app", name: name, titleID: tid, bundleID: "", version: "", commit: "", builtAt: nil)
+    }
+
+    @Test func titleIDFromFicheOrFileName() {
+        #expect(fb("Zelda", tid: "0100f2c0115b6000").resolvedTitleID == "0100F2C0115B6000")
+        #expect(fb("Zelda [0100F2C0115B6000] (Mac)").resolvedTitleID == "0100F2C0115B6000")
+        #expect(fb("Zelda [0100F2C0115B6000] (Mac)").displayTitle == "Zelda")
+        #expect(fb("Zelda [0100F2C0115B6000] (Mac)").isMacBuild)
+        #expect(fb("OCTOPATH TRAVELER").resolvedTitleID == nil)
+    }
+
+    @Test func matchesByTitleIDThenByName() {
+        let zelda = lib("The Legend of Zelda: TotK", "0100F2C0115B6000")
+        #expect(GameMatch.matches(zelda, fb("Otro nombre", tid: "0100F2C0115B6000")))
+        #expect(!GameMatch.matches(zelda, fb("The Legend of Zelda: TotK", tid: "0100000000010000")))   // el title ID manda
+        let poke = lib("Pokémon Legends: Arceus", "01001F5010DFA000")
+        #expect(GameMatch.matches(poke, fb("Pokémon Legends_ Arceus (Mac)")))                           // ficha vieja, sin ID
+        let p = GameMatch.presence(of: zelda, in: [fb("Zelda [0100F2C0115B6000] (Mac)"), fb("Zelda", tid: "0100F2C0115B6000"), fb("Mario")])
+        #expect(p.macBuild != nil && p.sources != nil)
+        #expect(p.summary == "app de Mac y archivos del juego")
+        #expect(GameMatch.presence(of: zelda, in: [fb("Mario")]).isEmpty)
     }
 }

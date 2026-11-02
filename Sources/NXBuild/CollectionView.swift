@@ -20,16 +20,14 @@ struct CollectionView: View {
         var id: String { rawValue }
     }
 
-    private func inLibrary(_ g: FBGame) -> Bool {
-        guard let t = g.titleId?.uppercased(), !t.isEmpty else { return false }
-        return library.games.contains { $0.titleID == t }
-    }
+    /// Por title ID (el de la ficha o el del nombre del zip) o, si la ficha no lo tiene, por nombre: GameMatch.
+    private func inLibrary(_ g: FBGame) -> Bool { GameMatch.inLibrary(g, library.games) != nil }
     private func isLocal(_ g: FBGame) -> Bool { downloads.zip(g) != nil || downloads.extracted(g) != nil }
 
     private var shown: [FBGame] {
         let q = search.trimmingCharacters(in: .whitespaces)
         return store.games.filter { g in
-            (q.isEmpty || g.title.localizedCaseInsensitiveContains(q) || (g.titleId ?? "").localizedCaseInsensitiveContains(q)
+            (q.isEmpty || g.title.localizedCaseInsensitiveContains(q) || (g.resolvedTitleID ?? "").localizedCaseInsensitiveContains(q)
                 || (g.publisher ?? "").localizedCaseInsensitiveContains(q))
             && (filter == .all || (filter == .missing ? !inLibrary(g) && !isLocal(g) : isLocal(g)))
         }
@@ -141,7 +139,7 @@ struct CollectionView: View {
                 .aspectRatio(1, contentMode: .fit)
                 .clipped()
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(g.title).font(.callout.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                    Text(g.displayTitle).font(.callout.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
                     Text(ByteCountFormatter.string(fromByteCount: g.file.size, countStyle: .file))
                         .font(.caption.monospaced()).foregroundStyle(.secondary)
                     CollectionStatusTag(game: g, inLibrary: inLibrary(g))
@@ -173,7 +171,7 @@ struct CollectionView: View {
                     await library.refresh()
                     // Descargada con URLSession no lleva cuarentena, pero por si el zip la traía dentro.
                     for a in apps where Quarantine.isSet(a.path) { try? await Quarantine.remove(from: a.path) }
-                    notice = "«\(g.title)» ya está en tu biblioteca: búscalo en Inicio."
+                    notice = "«\(g.displayTitle)» ya está en tu biblioteca: búscalo en Inicio."
                 }
             } catch { self.error = error.localizedDescription }
         }
@@ -220,11 +218,11 @@ struct CollectionDetail: View {
                         .scaledToFit().frame(maxWidth: .infinity, maxHeight: 240)
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(g.title).font(.title2.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                    Text(g.displayTitle).font(.title2.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                     Text([g.publisher, g.releaseDate.map { String($0.prefix(4)) }, g.version.map { "v\($0)" }]
                         .compactMap { $0 }.joined(separator: " · "))
                         .font(.callout).foregroundStyle(.secondary)
-                    Text([g.titleId, ByteCountFormatter.string(fromByteCount: g.file.size, countStyle: .file), g.file.name]
+                    Text([g.resolvedTitleID, g.isMacBuild ? "app de Mac" : nil, ByteCountFormatter.string(fromByteCount: g.file.size, countStyle: .file), g.file.name]
                         .compactMap { $0 }.joined(separator: " · "))
                         .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                 }

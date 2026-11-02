@@ -365,6 +365,7 @@ struct HomeView: View {
                 fact("Jugado", lastPlayed(g))
                 fact("Ocupa", sizes[g.id].map { $0.formatted(.byteCount(style: .file)) } ?? "…")
                 fact("Partidas", cloud.tag.lowercased())
+                if store.isConfigured { fact("Filebox", GameMatch.presence(of: g, in: store.games).summary) }
                 if g.isQuarantined {
                     Label("Bloqueado por macOS: pulsa Jugar para permitirlo", systemImage: "exclamationmark.shield")
                         .foregroundStyle(.orange)

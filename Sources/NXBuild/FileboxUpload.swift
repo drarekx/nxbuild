@@ -65,7 +65,9 @@ final class FileboxUploads {
 
     /// Nombre del zip, que Filebox usa como título inicial del juego.
     nonisolated static func zipName(for g: LibraryGame) -> String {
-        FileboxDownloads.safeName("\(g.name) (Mac)") + ".zip"
+        // El title ID en el nombre: Filebox no lo saca de una app, y así NX Build (y la web) saben qué juego es.
+        let tid = GameMatch.isTitleID(g.titleID) ? " [\(g.titleID.uppercased())]" : ""
+        return FileboxDownloads.safeName("\(g.name)\(tid) (Mac)") + ".zip"
     }
 
     /// Ruta dentro de `entrada` que se manda a la API.
@@ -385,12 +387,18 @@ struct FileboxUploadPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             switch uploads.state(game) {
             case nil:
+                let there = GameMatch.presence(of: game, in: store.games).macBuild
                 Button { uploads.upload(game, store: store) } label: {
-                    Label("Subir a Filebox", systemImage: "arrow.up.circle").frame(maxWidth: .infinity)
+                    Label(there == nil ? "Subir a Filebox" : "Volver a subir a Filebox", systemImage: "arrow.up.circle")
+                        .frame(maxWidth: .infinity)
                 }
                 .disabled(!store.isConfigured)
                 .help(store.isConfigured ? "Comprime la app, la copia a la carpeta de entrada de Filebox y la importa"
                                          : "Configura Filebox en Ajustes (dirección y token)")
+                if let there {
+                    Text("Ya hay una app de Mac en Filebox (\(there.file.size.formatted(.byteCount(style: .file))), subida \(Filebox.date(there.createdAt).map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "")). Volver a subirla crea otra entrada.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
             case .mounting?:
                 step("Conectando con la carpeta compartida…", nil)
                 cancel

@@ -222,7 +222,12 @@ struct LibraryView: View {
                     } else if g.isQuarantined {
                         StatusTag(text: "Bloqueado por macOS", color: .orange)
                     } else {
-                        StatusTag(text: cloud.tag, color: cloud.color)
+                        HStack(spacing: 8) {
+                            StatusTag(text: cloud.tag, color: cloud.color)
+                            if GameMatch.presence(of: g, in: filebox.games).macBuild != nil {
+                                StatusTag(text: "En Filebox", color: .egluuText)
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
@@ -306,6 +311,12 @@ struct LibraryView: View {
                                 Text("Solo en este Mac")
                                 Button("Sincronizar en la nube…") { cloudFor = g }.buttonStyle(.link)
                             }
+                        }
+                    }
+                    if filebox.isConfigured {
+                        GridRow {
+                            StatusTag(text: "Filebox")
+                            Text(GameMatch.presence(of: g, in: filebox.games).summary.capitalizedFirst)
                         }
                     }
                     GridRow {

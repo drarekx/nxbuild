@@ -27,7 +27,7 @@ struct LibraryView: View {
     @State private var error: String?
     @State private var refreshTick = 0   // repinta estados tras cerrar una hoja
     @State private var allowFor: LibraryGame?   // pide permiso para quitar la marca de cuarentena y jugar
-    @State private var copyOffer: (game: LibraryGame, why: String)?   // no se pudo quitar: ofrecer copia limpia
+    @State private var copyOffer: (game: LibraryGame, why: String, protected: Bool)?   // no se pudo quitar: ofrecer copia limpia
     @State private var busy: Busy?               // quitando la marca o copiando: ventana de progreso encima
     @State private var work: Task<Void, Never>?
     private static let appsFolder = NSHomeDirectory() + "/Applications"
@@ -86,9 +86,17 @@ struct LibraryView: View {
         }
         .alert("No se pudo quitar la marca", isPresented: .constant(copyOffer != nil), presenting: copyOffer) { o in
             Button("Hacer una copia limpia") { copyOffer = nil; cleanCopy(o.game) }
+            if o.protected {
+                Button("Dar permiso en Ajustes…") {
+                    copyOffer = nil
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles")!)
+                }
+            }
             Button("Cancelar", role: .cancel) { copyOffer = nil }
         } message: { o in
-            Text("\(o.why)\n\nNX Build puede copiar el juego a ~/Applications sin la marca y a tu nombre (ocupa lo mismo que el original; luego puedes borrar el original). Las partidas no cambian: van por el title ID.")
+            Text(o.protected
+                 ? "\(o.why)\n\nRecomendado: copia limpia. NX Build copia el juego a ~/Applications sin la marca (ocupa lo mismo; luego puedes borrar el original). Las partidas no cambian: van por el title ID.\n\nO activa NX Build en Ajustes › Privacidad y seguridad › Gestión de apps, vuelve a abrir NX Build y pulsa Permitir abrir."
+                 : "\(o.why)\n\nNX Build puede copiar el juego a ~/Applications sin la marca y a tu nombre (ocupa lo mismo que el original; luego puedes borrar el original). Las partidas no cambian: van por el title ID.")
         }
         .alert("No se pudo abrir el juego", isPresented: .constant(error != nil)) {
             Button("OK") { error = nil }
@@ -154,8 +162,11 @@ struct LibraryView: View {
             } catch is CancellationError {
             } catch Quarantine.Failure.cancelled {
                 // canceló aquí o en la contraseña: nada que avisar
+            } catch let e as Quarantine.Failure {
+                if case .protectedByMacOS = e { copyOffer = (g, e.localizedDescription, true) }
+                else { copyOffer = (g, e.localizedDescription, false) }
             } catch {
-                copyOffer = (g, error.localizedDescription)
+                copyOffer = (g, error.localizedDescription, false)
             }
         }
     }

@@ -28,12 +28,16 @@ enum Quarantine {
 
     enum Failure: LocalizedError {
         case readOnlyVolume(String)
+        /// EPERM: la protección «Gestión de apps» de macOS no deja a NX Build cambiar otra app, ni como root.
+        case protectedByMacOS(String, String)
         case cancelled
         case failed(String, String)
         var errorDescription: String? {
             switch self {
             case .readOnlyVolume(let p):
                 "«\(p)» está en un disco de solo lectura (una imagen de disco o una carpeta compartida)."
+            case .protectedByMacOS(let p, let first):
+                "macOS protege «\(p)» (Gestión de apps): no deja que otra app la modifique, ni con la contraseña de administrador.\n\(first)"
             case .cancelled:
                 "Cancelado: no se ha terminado de permitir la app."
             case .failed(let p, let why):
@@ -56,20 +60,22 @@ enum Quarantine {
         report(Progress(step: "Contando archivos"))
         let items = try list(path)
         var p = Progress(step: step, total: items.count)
-        var denied = 0, firstError = ""
+        var denied = 0, protected = 0, firstError = ""
         var last = Date.distantPast
         for rel in items {
             try Task.checkCancellation()
             let full = rel.isEmpty ? path : path + "/" + rel
             if removexattr(full, attribute, XATTR_NOFOLLOW) != 0, errno != ENOATTR {
-                denied += 1
+                if errno == EPERM { protected += 1 } else { denied += 1 }
                 if firstError.isEmpty { firstError = "\(rel.isEmpty ? name : rel): \(String(cString: strerror(errno)))" }
             }
             p.done += 1
             if Date().timeIntervalSince(last) > 0.1 { p.current = rel; report(p); last = Date() }
         }
         p.current = ""; report(p)
-        guard denied > 0 || isSet(path) || anyInside(path) else { return }
+        guard denied > 0 || protected > 0 || isSet(path) || anyInside(path) else { return }
+        // EPERM es TCC (Gestión de apps): como administrador da el mismo error, no tiene sentido pedir la contraseña.
+        if protected > 0 { throw Failure.protectedByMacOS(name, firstError) }
 
         report(Progress(step: "\(denied) archivo\(denied == 1 ? "" : "s") sin permiso (\(firstError)). Esperando la contraseña de administrador…"))
         // Como administrador. La ruta va como argumento (quoted form), nunca dentro del texto del script.
@@ -81,14 +87,16 @@ enum Quarantine {
         ]
         let (code, out) = try run("/usr/bin/osascript", script.flatMap { ["-e", $0] } + [path])
         if out.contains("-128") { throw Failure.cancelled }   // userCanceledErr: canceló la contraseña
+        if out.contains("Operation not permitted") { throw Failure.protectedByMacOS(name, summary(out) ?? "") }
         if isSet(path) || anyInside(path) {
             throw Failure.failed(name, summary(out) ?? "la marca sigue ahí después de quitarla como administrador (osascript \(code)). Puede que macOS proteja esa carpeta o que se sincronice y vuelva a ponerla.")
         }
     }
 
-    /// Plan B cuando la marca no se deja quitar: copia la app a `folder` (~/Applications) con archivos nuevos a nombre
-    /// del usuario, les da permiso de escritura y les quita la marca. Ni ditto (hace enlaces duros: comparten la marca
-    /// con el original) ni cp -X (macOS vuelve a poner la marca a los clones) sirven solos; cp -R + chmod + quitar sí.
+    /// Plan B cuando la marca no se deja quitar (Gestión de apps, permisos): copia la app a `folder` (~/Applications)
+    /// con rsync -rlt, que escribe archivos nuevos sin atributos extendidos: la copia nace sin la marca y no hay que
+    /// modificarla después (que la Gestión de apps podría impedir). ditto hace enlaces duros que comparten la marca y
+    /// cp (con o sin -X) clona los archivos y la marca va con ellos.
     /// Devuelve la ruta de la copia; si se cancela o falla, borra la copia a medias.
     nonisolated static func cleanCopy(of path: String, into folder: String, report: @escaping Report = { _ in }) async throws -> String {
         let fm = FileManager.default
@@ -107,20 +115,18 @@ enum Quarantine {
         let total = try list(path).count
         let step = "Copiando a " + folder.replacingOccurrences(of: NSHomeDirectory(), with: "~")
         report(Progress(step: step, total: total))
-        let prefix = target + "/"
         do {
-            let (st, out) = try run("/bin/cp", ["-R", "-v", path, target]) { lines, lastLine in
-                // cp -v escribe «origen -> destino» por archivo
-                let cur = lastLine.components(separatedBy: " -> ").last.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : "" } ?? ""
-                report(Progress(step: step, done: min(lines, total), total: total, current: cur))
+            // -v escribe una línea por archivo (su ruta relativa): sirve de progreso.
+            let (st, out) = try run("/usr/bin/rsync", ["-rlt", "-v", path + "/", target + "/"]) { lines, lastLine in
+                report(Progress(step: step, done: min(lines, total), total: total, current: lastLine))
             }
             guard st == 0 else {
-                let errs = out.split(separator: "\n").filter { $0.hasPrefix("cp:") }.joined(separator: "\n")
-                throw Failure.failed(name, "no se pudo copiar: " + (summary(errs) ?? "cp terminó con \(st)"))
+                let errs = out.split(whereSeparator: { $0 == "\n" }).filter { $0.contains("rsync") || $0.contains("error") }.joined(separator: "\n")
+                throw Failure.failed(name, "no se pudo copiar: " + (summary(errs) ?? "rsync terminó con \(st)"))
             }
-            report(Progress(step: "Dando permisos a la copia"))
-            _ = try run("/bin/chmod", ["-R", "u+w", target])
-            try await remove(from: target, report: report)
+            if isSet(target) || anyInside(target) {
+                throw Failure.failed(name, "la copia en \(target) también lleva la marca.")
+            }
         } catch {
             discard()
             throw error is CancellationError ? Failure.cancelled : error
@@ -141,7 +147,7 @@ enum Quarantine {
 
     /// Las primeras líneas de error, sin repetir el mismo «Permission denied» miles de veces.
     private static func summary(_ out: String) -> String? {
-        let lines = out.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        let lines = out.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).map(String.init).filter { !$0.isEmpty }
         guard !lines.isEmpty else { return nil }
         let head = lines.prefix(3).joined(separator: "\n")
         return lines.count > 3 ? head + "\n(y \(lines.count - 3) líneas más)" : head

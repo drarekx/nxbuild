@@ -27,6 +27,9 @@ struct LibraryView: View {
     @State private var error: String?
     @State private var refreshTick = 0   // repinta estados tras cerrar una hoja
     @State private var allowFor: LibraryGame?   // pide permiso para quitar la marca de cuarentena y jugar
+    @State private var copyOffer: (game: LibraryGame, why: String)?   // no se pudo quitar: ofrecer copia limpia
+    @State private var copying: String?          // path del juego que se está copiando
+    private static let appsFolder = NSHomeDirectory() + "/Applications"
 
     private var shown: [LibraryGame] {
         let q = search.trimmingCharacters(in: .whitespaces)
@@ -76,6 +79,12 @@ struct LibraryView: View {
             Button("Cancelar", role: .cancel) { allowFor = nil }
         } message: { _ in
             Text("macOS lo ha marcado como descargado y, como no está notarizado por Apple, no dejará abrirlo. Permitirlo quita esa marca de esta copia (lo mismo que «Abrir igualmente» en Privacidad y seguridad). Hazlo solo con juegos que hayas construido tú.")
+        }
+        .alert("No se pudo quitar la marca", isPresented: .constant(copyOffer != nil), presenting: copyOffer) { o in
+            Button("Hacer una copia limpia") { copyOffer = nil; cleanCopy(o.game) }
+            Button("Cancelar", role: .cancel) { copyOffer = nil }
+        } message: { o in
+            Text("\(o.why)\n\nNX Build puede copiar el juego a ~/Applications sin la marca y a tu nombre (ocupa lo mismo que el original; luego puedes borrar el original). Las partidas no cambian: van por el title ID.")
         }
         .alert("No se pudo abrir el juego", isPresented: .constant(error != nil)) {
             Button("OK") { error = nil }
@@ -132,6 +141,25 @@ struct LibraryView: View {
                 try await Quarantine.remove(from: g.path)
                 refreshTick += 1
                 if thenPlay { play(g) }
+            } catch Quarantine.Failure.cancelled {
+                // el usuario canceló la contraseña: nada que avisar
+            } catch {
+                copyOffer = (g, error.localizedDescription)
+            }
+        }
+    }
+
+    /// Copia limpia en ~/Applications, la añade a la biblioteca y la selecciona.
+    private func cleanCopy(_ g: LibraryGame) {
+        copying = g.path
+        Task {
+            defer { copying = nil }
+            do {
+                let dest = try await Quarantine.cleanCopy(of: g.path, into: Self.appsFolder)
+                if !library.folders.contains(Self.appsFolder) { library.addFolder(Self.appsFolder) }
+                await library.refresh()
+                selected = dest
+                refreshTick += 1
             } catch { self.error = error.localizedDescription }
         }
     }
@@ -211,8 +239,12 @@ struct LibraryView: View {
                 if quarantined {
                     VStack(alignment: .leading, spacing: 8) {
                         NoteCallout(text: "Copiado de otro Mac: macOS lo ha marcado como descargado y no deja abrirlo porque no está notarizado por Apple.")
-                        Button("Permitir abrir") { allow(g, thenPlay: false) }
-                            .help("Quita la marca com.apple.quarantine de esta copia (xattr -dr)")
+                        if copying == g.path {
+                            ProgressView("Copiando a ~/Applications…").controlSize(.small)
+                        } else {
+                            Button("Permitir abrir") { allow(g, thenPlay: false) }
+                                .help("Quita la marca com.apple.quarantine de esta copia (xattr -dr)")
+                        }
                     }
                 }
                 if let v = needsSystem {

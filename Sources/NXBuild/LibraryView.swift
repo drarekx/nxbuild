@@ -20,6 +20,8 @@ struct LibraryView: View {
     @Environment(GameLibrary.self) private var library
     @Environment(AppSettings.self) private var settings
     @Binding var showBuild: Bool
+    var startWith: String? = nil      // juego elegido al abrir (desde el inicio)
+    var playOnAppear = false          // y jugarlo (p. ej. para pedir permiso si está en cuarentena)
     @State private var selected: String?
     @State private var search = ""
     @State private var optionsFor: LibraryGame?
@@ -72,7 +74,11 @@ struct LibraryView: View {
                     .id("\(g.id)-\(refreshTick)")
             }
         }
-        .task { await library.refresh() }
+        .task {
+            if let startWith { selected = startWith }
+            await library.refresh()
+            if playOnAppear, let g = library.games.first(where: { $0.id == startWith }) { play(g) }
+        }
         .sheet(item: $optionsFor, onDismiss: { refreshTick += 1 }) { g in LaunchOptionsView(game: g) }
         .sheet(item: $cloudFor, onDismiss: { refreshTick += 1 }) { g in CloudSavesView(game: g) }
         .sheet(isPresented: .constant(busy != nil)) {
@@ -453,34 +459,6 @@ struct LaunchOptionsView: View {
         HStack(spacing: 4) {
             Text(s.label)
             if changed { Circle().fill(.tint).frame(width: 6, height: 6).help("Cambiado (el probado es \(s.defaultValue))") }
-        }
-    }
-}
-
-/// Ventana principal: construir y biblioteca.
-struct RootView: View {
-    @Environment(BuildRunner.self) private var runner
-    @Environment(GameLibrary.self) private var library
-    @State private var tab = "library"
-
-    var body: some View {
-        TabView(selection: $tab) {
-            Tab("Biblioteca", systemImage: "square.grid.2x2", value: "library") {
-                LibraryView(showBuild: Binding(get: { tab == "build" }, set: { if $0 { tab = "build" } }))
-            }
-            Tab("Colección", systemImage: "shippingbox", value: "collection") {
-                CollectionView(showBuild: Binding(get: { tab == "build" }, set: { if $0 { tab = "build" } }))
-            }
-            Tab(runner.isRunning ? "Construyendo…" : "Nueva build", systemImage: runner.isRunning ? "gearshape.2" : "hammer", value: "build") {
-                ContentView()
-            }
-        }
-        .tint(Color.egluuText)
-        .onChange(of: runner.phase) { _, phase in
-            // Una app de Mac recién construida entra en la biblioteca: su carpeta se añade y se vuelve a buscar.
-            guard phase == .done, let out = runner.outputDir, runner.lastPlatform == .macApp else { return }
-            library.addFolder(out.path)
-            Task { await library.refresh() }
         }
     }
 }

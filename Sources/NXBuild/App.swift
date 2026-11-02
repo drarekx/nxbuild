@@ -22,8 +22,9 @@ struct NXBuildApp: App {
                 .environment(filebox)
                 .environment(downloads)
                 .environment(inbox)
-                .frame(minWidth: 820, minHeight: 620)
+                .frame(minWidth: 1060, minHeight: 720)
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {
@@ -92,6 +93,12 @@ struct SettingsView: View {
             Toggle("Avisar al terminar una build (si la app no está delante)", isOn: $s.notifyOnFinish)
             Toggle("Jugar sin la ventana de ajustes del juego (las opciones se eligen aquí)", isOn: $s.skipGameWindow)
             FileboxSettingsForm()
+            Section("Portadas") {
+                Toggle("Usar la portada de Filebox cuando el juego esté en la colección",
+                       isOn: Binding(get: { Covers.shared.preferFilebox }, set: { Covers.shared.preferFilebox = $0 }))
+                Text("Si no, o sin conexión la primera vez, se usa el icono del NSP. Cada juego puede elegir la suya con clic derecho en el inicio.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Actualizaciones") {
                 Toggle("Buscar actualizaciones automáticamente", isOn: Binding(get: { Updater.shared.autoCheck },
                                                                                 set: { Updater.shared.autoCheck = $0 }))

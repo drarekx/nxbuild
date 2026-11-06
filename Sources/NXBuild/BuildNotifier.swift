@@ -15,7 +15,9 @@ final class BuildNotifier: NSObject, UNUserNotificationCenterDelegate {
         guard available else { return }
         let c = UNUserNotificationCenter.current()
         c.delegate = self
-        c.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // Versión async: el cierre de la versión con completion hereda el MainActor de la clase y el sistema
+        // lo llama en una cola de fondo, lo que tumba la app (dispatch_assert_queue) en la primera build.
+        Task { _ = try? await c.requestAuthorization(options: [.alert, .sound]) }
     }
 
     func notify(title: String, body: String, success: Bool) {

@@ -10,7 +10,7 @@ enum Platform: String, CaseIterable, Identifiable {
 }
 
 struct StageRow: Identifiable {
-    enum State { case running, ok, failed }
+    enum State { case running, ok, warning, failed }
     let id: Int          // k
     var name: String
     var step: String = ""
@@ -239,7 +239,9 @@ final class BuildRunner {
                 eta: num(obj["eta"]), elapsed: num(obj["elapsed"]))
         case "stage_end":
             updateStage(k) {
-                $0.state = (obj["ok"] as? Bool ?? true) ? .ok : .failed
+                // warn: true = la etapa terminó pero con un problema que no para la build
+                // (p. ej. el pipeline archive falló y la app se empaqueta sin él).
+                $0.state = !(obj["ok"] as? Bool ?? true) ? .failed : (obj["warn"] as? Bool ?? false) ? .warning : .ok
                 $0.summary = obj["summary"] as? String ?? ""
                 $0.elapsed = num(obj["elapsed"])
             }

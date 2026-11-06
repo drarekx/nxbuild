@@ -599,6 +599,7 @@ struct ContentView: View {
                     switch st.state {
                     case .running: StatusTag(text: "En curso", color: .egluuText)
                     case .ok: StatusTag(text: "Hecho", color: .green)
+                    case .warning: StatusTag(text: "Aviso", color: .orange)
                     case .failed: StatusTag(text: "Error", color: .red)
                     }
                 }

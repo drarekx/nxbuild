@@ -28,6 +28,8 @@ struct LibraryView: View {
     @State private var search = ""
     @State private var optionsFor: LibraryGame?
     @State private var cloudFor: LibraryGame?
+    @State private var moveFor: LibraryGame?
+    @State private var moveError: String?
     @State private var error: String?
     @State private var refreshTick = 0   // repinta estados tras cerrar una hoja
     @State private var allowFor: LibraryGame?   // pide permiso para quitar la marca de cuarentena y jugar
@@ -83,6 +85,7 @@ struct LibraryView: View {
         }
         .sheet(item: $optionsFor, onDismiss: { refreshTick += 1 }) { g in LaunchOptionsView(game: g) }
         .sheet(item: $cloudFor, onDismiss: { refreshTick += 1 }) { g in CloudSavesView(game: g) }
+        .sheet(item: $moveFor) { g in MoveGameView(game: g) { plan, dest in move(g, plan, to: dest) } }
         .sheet(isPresented: .constant(busy != nil)) {
             if let b = busy { BusySheet(busy: b) { work?.cancel() } }
         }
@@ -106,6 +109,9 @@ struct LibraryView: View {
                  ? "\(o.why)\n\nRecomendado: copia limpia. NX Build copia el juego a ~/Applications sin la marca (ocupa lo mismo; luego puedes borrar el original). Las partidas no cambian: van por el title ID.\n\nO activa NX Build en Ajustes › Privacidad y seguridad › Gestión de apps, vuelve a abrir NX Build y pulsa Permitir abrir."
                  : "\(o.why)\n\nNX Build puede copiar el juego a ~/Applications sin la marca y a tu nombre (ocupa lo mismo que el original; luego puedes borrar el original). Las partidas no cambian: van por el title ID.")
         }
+        .alert("No se pudo mover el juego", isPresented: .constant(moveError != nil)) {
+            Button("OK") { moveError = nil }
+        } message: { Text(moveError ?? "") }
         .alert("No se pudo abrir el juego", isPresented: .constant(error != nil)) {
             Button("OK") { error = nil }
         } message: { Text(error ?? "") }
@@ -179,6 +185,53 @@ struct LibraryView: View {
         }
     }
 
+    private func askMove(_ g: LibraryGame) {
+        if library.isRunning(g) { moveError = GameMove.Failure.running.localizedDescription; return }
+        if let r = BuildRunner.active, r.isRunning,
+           r.lastNSPDir?.standardizedFileURL == g.url.deletingLastPathComponent().standardizedFileURL {
+            moveError = "Hay una build en marcha en la carpeta de este juego. Espera a que termine o cancélala."
+            return
+        }
+        moveFor = g
+    }
+
+    /// Mueve el juego (GameMove), añade el destino a la biblioteca si no estaba y selecciona la app en su sitio nuevo.
+    private func move(_ g: LibraryGame, _ plan: GameMove.Plan, to destRoot: URL) {
+        guard busy == nil else { return }
+        if library.isRunning(g) { moveError = GameMove.Failure.running.localizedDescription; return }
+        selected = g.id
+        busy = Busy(game: g, title: "Moviendo «\(g.name)»", progress: .init(step: "Empezando"))
+        work = Task {
+            defer { busy = nil; work = nil }
+            do {
+                // Fuera del hilo principal (copia y espera a ditto); Cancelar de la ventana llega a la tarea suelta.
+                let copy = Task.detached {
+                    try await GameMove.run(plan, to: destRoot) { p in
+                        Task { @MainActor in if busy?.game.id == g.id { busy?.progress = p } }
+                    }
+                }
+                let newFolder: URL
+                do {
+                    newFolder = try await withTaskCancellationHandler { try await copy.value } onCancel: { copy.cancel() }
+                } catch GameMove.Failure.leftovers(let dest, let paths) {
+                    // Movido, pero quedó algo en el disco viejo: se sigue y se avisa al final.
+                    newFolder = URL(fileURLWithPath: dest)
+                    moveError = GameMove.Failure.leftovers(dest, paths).localizedDescription
+                }
+                let covered = library.folders.contains { newFolder.standardizedFileURL.path.hasPrefix($0 + "/") }
+                if !covered { library.addFolder(destRoot.path) }
+                if URL(fileURLWithPath: settings.lastNSPDir).standardizedFileURL == plan.sourceFolder.standardizedFileURL {
+                    settings.lastNSPDir = newFolder.path
+                }
+                await library.refresh()
+                selected = newFolder.appendingPathComponent(g.url.lastPathComponent).path
+                refreshTick += 1
+            } catch Quarantine.Failure.cancelled {
+            } catch is CancellationError {
+            } catch { moveError = error.localizedDescription }
+        }
+    }
+
     /// Copia limpia en ~/Applications, la añade a la biblioteca y la selecciona.
     private func cleanCopy(_ g: LibraryGame) {
         guard busy == nil else { return }
@@ -247,6 +300,7 @@ struct LibraryView: View {
             Button("Subir a Filebox") { selected = g.id; uploads.upload(g, store: filebox) }
                 .disabled(!filebox.isConfigured || uploads.state(g)?.isActive == true)
             Divider()
+            Button("Mover a otro disco…") { askMove(g) }.disabled(busy != nil)
             Button("Mostrar en Finder") { NSWorkspace.shared.activateFileViewerSelecting([g.url]) }
         }
     }
@@ -331,6 +385,7 @@ struct LibraryView: View {
                         StatusTag(text: "Archivos")
                         VStack(alignment: .leading, spacing: 3) {
                             Button("Mostrar en Finder") { NSWorkspace.shared.activateFileViewerSelecting([g.url]) }
+                            Button("Mover a otro disco…") { askMove(g) }.disabled(busy != nil)
                             Button("Log") { NSWorkspace.shared.open(g.logURL) }.disabled(!fm.fileExists(atPath: g.logURL.path))
                             Button("Carpeta de partidas") { NSWorkspace.shared.open(g.saveURL) }.disabled(!fm.fileExists(atPath: g.saveURL.path))
                             if fm.fileExists(atPath: backups.path) {
@@ -509,7 +564,11 @@ struct BusySheet: View {
             }
             HStack {
                 if p.total > 0 {
-                    Text("\(p.done.formatted()) de \(p.total.formatted()) archivos")
+                    if p.unit == .megabytes {
+                        Text("\(GameMove.fmt(Int64(p.done) << 20)) de \(GameMove.fmt(Int64(p.total) << 20))")
+                    } else {
+                        Text("\(p.done.formatted()) de \(p.total.formatted()) archivos")
+                    }
                 }
                 Spacer()
                 TimelineView(.periodic(from: busy.started, by: 1)) { ctx in

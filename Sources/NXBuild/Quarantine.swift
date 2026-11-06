@@ -22,6 +22,9 @@ enum Quarantine {
         var done = 0
         var total = 0          // 0: sin total conocido (barra indeterminada)
         var current = ""       // ruta relativa dentro de la app
+        /// done y total cuentan archivos, o MB (GameMove).
+        enum Unit: Sendable { case files, megabytes }
+        var unit: Unit = .files
         var fraction: Double? { total > 0 ? min(1, Double(done) / Double(total)) : nil }
     }
     typealias Report = @Sendable (Progress) -> Void

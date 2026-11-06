@@ -387,4 +387,6 @@ final class FileboxDownloads {
 @MainActor @Observable
 final class BuildInbox {
     var pending: [URL]?
+    /// Reconstruir desde la biblioteca: la build de app de Mac empieza sola si todo está listo.
+    var autoStart = false
 }

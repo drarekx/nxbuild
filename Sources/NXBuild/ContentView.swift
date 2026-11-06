@@ -191,6 +191,11 @@ struct ContentView: View {
             inbox.pending = nil
             selection = nil
             _ = handleDrop(urls)
+            if inbox.autoStart {
+                inbox.autoStart = false
+                platform = .macApp
+                Task { await autoStartBuild() }
+            }
         }
     }
 
@@ -265,6 +270,28 @@ struct ContentView: View {
     }
 
     private var switch2Tag: some View { StatusTag(text: "Switch 2", color: .red) }
+
+    /// Reconstruir desde la biblioteca: empieza en cuanto se sabe que se puede; si no, dice por qué y deja la pantalla
+    /// lista para arreglarlo.
+    private func autoStartBuild() async {
+        await detectSource()
+        var why: String?
+        if case .problem(let p)? = source { why = p }
+        else if source == nil { why = "en la carpeta no están los archivos del juego" }
+        else if source?.needsKeys == true {
+            if keysPath.isEmpty { why = "falta elegir prod.keys" }
+            else {
+                await runKeyCheck()
+                if let k = keyCheck, k.isProblem { why = k.message }
+            }
+        }
+        if why == nil, !canBuild {
+            why = !settings.pythonOK || !settings.scriptOK ? "no encuentro Python o nxnative (Ajustes)"
+                : !(metal?.matches ?? true) ? "el compilador Metal no es el probado (mira el aviso)" : "no se puede construir ahora"
+        }
+        if let why { dropMessage = "No he empezado la build: \(why)."; return }
+        startBuild()
+    }
 
     private func detectSource() async {
         guard !nspDir.isEmpty else { source = nil; return }

@@ -21,6 +21,8 @@ struct LibraryView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(FileboxUploads.self) private var uploads
     @Environment(FileboxStore.self) private var filebox
+    @Environment(BuildInbox.self) private var inbox
+    @Environment(BuildRunner.self) private var runner
     @Binding var showBuild: Bool
     var startWith: String? = nil      // juego elegido al abrir (desde el inicio)
     var playOnAppear = false          // y jugarlo (p. ej. para pedir permiso si está en cuarentena)
@@ -30,6 +32,7 @@ struct LibraryView: View {
     @State private var cloudFor: LibraryGame?
     @State private var moveFor: LibraryGame?
     @State private var moveError: String?
+    @State private var rebuildError: String?
     @State private var error: String?
     @State private var refreshTick = 0   // repinta estados tras cerrar una hoja
     @State private var allowFor: LibraryGame?   // pide permiso para quitar la marca de cuarentena y jugar
@@ -109,6 +112,9 @@ struct LibraryView: View {
                  ? "\(o.why)\n\nRecomendado: copia limpia. NX Build copia el juego a ~/Applications sin la marca (ocupa lo mismo; luego puedes borrar el original). Las partidas no cambian: van por el title ID.\n\nO activa NX Build en Ajustes › Privacidad y seguridad › Gestión de apps, vuelve a abrir NX Build y pulsa Permitir abrir."
                  : "\(o.why)\n\nNX Build puede copiar el juego a ~/Applications sin la marca y a tu nombre (ocupa lo mismo que el original; luego puedes borrar el original). Las partidas no cambian: van por el title ID.")
         }
+        .alert("No se puede reconstruir", isPresented: .constant(rebuildError != nil)) {
+            Button("OK") { rebuildError = nil }
+        } message: { Text(rebuildError ?? "") }
         .alert("No se pudo mover el juego", isPresented: .constant(moveError != nil)) {
             Button("OK") { moveError = nil }
         } message: { Text(moveError ?? "") }
@@ -183,6 +189,16 @@ struct LibraryView: View {
                 copyOffer = (g, error.localizedDescription, false)
             }
         }
+    }
+
+    /// Abre Nueva build con la carpeta del juego y la arranca sola (app de Mac). La app nueva sustituye a la vieja.
+    private func rebuild(_ g: LibraryGame) {
+        if library.isRunning(g) { rebuildError = "El juego está abierto. Ciérralo antes de reconstruirlo."; return }
+        if let why = Rebuild.check(app: g.url, titleID: g.titleID) { rebuildError = why; return }
+        guard let dir = Rebuild.folder(of: g.url) else { return }
+        inbox.autoStart = true
+        inbox.pending = [dir]
+        showBuild = true
     }
 
     private func askMove(_ g: LibraryGame) {
@@ -299,6 +315,8 @@ struct LibraryView: View {
             if g.isQuarantined { Button("Permitir abrir") { allow(g, thenPlay: false) }.disabled(busy != nil) }
             Button("Subir a Filebox") { selected = g.id; uploads.upload(g, store: filebox) }
                 .disabled(!filebox.isConfigured || uploads.state(g)?.isActive == true)
+            Button("Reconstruir") { rebuild(g) }
+                .disabled(runner.isRunning || Rebuild.folder(of: g.url) == nil)
             Divider()
             Button("Mover a otro disco…") { askMove(g) }.disabled(busy != nil)
             Button("Mostrar en Finder") { NSWorkspace.shared.activateFileViewerSelecting([g.url]) }
@@ -386,6 +404,9 @@ struct LibraryView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Button("Mostrar en Finder") { NSWorkspace.shared.activateFileViewerSelecting([g.url]) }
                             Button("Mover a otro disco…") { askMove(g) }.disabled(busy != nil)
+                            Button("Reconstruir") { rebuild(g) }
+                                .disabled(runner.isRunning || Rebuild.folder(of: g.url) == nil)
+                                .help("Vuelve a construir la app con el nxnative actual y los archivos del juego de su carpeta")
                             Button("Log") { NSWorkspace.shared.open(g.logURL) }.disabled(!fm.fileExists(atPath: g.logURL.path))
                             Button("Carpeta de partidas") { NSWorkspace.shared.open(g.saveURL) }.disabled(!fm.fileExists(atPath: g.saveURL.path))
                             if fm.fileExists(atPath: backups.path) {

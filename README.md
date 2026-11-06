@@ -38,6 +38,7 @@ La app busca versiones nuevas al abrirse y una vez al día; también en **NX Bui
 - **Colección (Filebox)**: conecta con la API de Filebox (dirección + token de API, guardado en un archivo 0600), muestra la colección con portadas, busca y filtra, descarga los .zip con reanudación (Range), comprueba el SHA-256, los descomprime y abre la build con los NSP/XCI de dentro.
 - **Juegos copiados de otro Mac**: detecta la marca de cuarentena que pone macOS (AirDrop, descargas) y la quita con **Permitir abrir** (pide la contraseña de administrador si los archivos son de solo lectura o de otro usuario). Si macOS lo impide por la protección **Gestión de apps**, ofrece una copia limpia en `~/Applications` (rsync, nace sin la marca) o dar ese permiso a NX Build en Ajustes, sin tocar la firma; avisa si el juego pide una versión de macOS más nueva que la del Mac.
 - **Liberar espacio**: borra lo que la siguiente build vuelve a generar.
+- **Reconstruir**: clic derecho en un juego de la biblioteca; si los archivos del juego (NSP, NUP o dump) están en la carpeta de la app, abre Nueva build con ella y la arranca sola, y la app nueva sustituye a la vieja. Si falta algo (prod.keys, dependencias), dice qué.
 - **Mover a otro disco**: desde la biblioteca, mueve el juego entero (la app, su carpeta de build con la caché de shaders y los NSP / NUP / dump de los que salió, aunque estuvieran enlazados) a otro disco; copia con ditto, comprueba los bytes y solo entonces borra el original. Avisa si el destino no cabe o es exFAT.
 
 ## Desarrollo

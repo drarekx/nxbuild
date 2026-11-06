@@ -169,6 +169,37 @@ enum GameStaging {
     }
 }
 
+/// Reconstruir un juego de la biblioteca: la carpeta de su app, si tiene con qué (los archivos del juego, un NUP o un
+/// dump del mismo title ID). La build deja la app nueva en esa misma carpeta, en lugar de la vieja.
+enum Rebuild {
+    /// Barato (lista la carpeta): para habilitar el menú.
+    static func folder(of app: URL) -> URL? {
+        let dir = app.deletingLastPathComponent()
+        guard let s = GameSource.detect(dir) else { return nil }
+        if case .problem = s { return nil }
+        return dir
+    }
+
+    /// Antes de empezar: que los archivos sean de ese juego. nil si vale; si no, el motivo.
+    static func check(app: URL, titleID: String) -> String? {
+        guard let dir = folder(of: app) else {
+            return "En «\(app.deletingLastPathComponent().path)» no están los archivos del juego (NSP, NSZ, XCI, .nup o dump)."
+        }
+        let tid = UInt64(titleID, radix: 16)
+        switch GameSource.detect(dir) {
+        case .packages?:
+            let fams = GameStaging.scan(dir).files.compactMap(\.appID)
+            if let tid, !fams.isEmpty, !fams.contains(tid) {
+                return "Los archivos de la carpeta son de otro juego (\(fams.map { String(format: "%016llX", $0) }.first ?? "?")), no de \(titleID)."
+            }
+        case .dump(let t, _, _)?:
+            if let t, let tid, t != tid { return "El dump de la carpeta es de otro juego." }
+        default: break
+        }
+        return nil
+    }
+}
+
 /// De qué está hecho el juego de una carpeta, como lo decide scripts/build_ipa_from_nsp.py: paquetes (NSP/NSZ/XCI/XCZ,
 /// necesitan prod.keys), un contenedor NUP (`.nup`, scripts/pack_nup.py) o un dump en carpetas (scripts/pack_dump.py).
 /// Los dos últimos no van cifrados: no necesitan prod.keys. Son la forma habitual de los juegos de Switch 2.

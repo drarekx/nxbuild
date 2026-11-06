@@ -168,3 +168,84 @@ enum GameStaging {
         return sel
     }
 }
+
+/// De qué está hecho el juego de una carpeta, como lo decide scripts/build_ipa_from_nsp.py: paquetes (NSP/NSZ/XCI/XCZ,
+/// necesitan prod.keys), un contenedor NUP (`.nup`, scripts/pack_nup.py) o un dump en carpetas (scripts/pack_dump.py).
+/// Los dos últimos no van cifrados: no necesitan prod.keys. Son la forma habitual de los juegos de Switch 2.
+enum GameSource: Equatable, Sendable {
+    case packages
+    case nup(URL)
+    case dump(titleID: UInt64?, updates: [Int], dlc: Int)
+    /// La carpeta no se puede construir tal cual (p. ej. dos NUP): el motivo.
+    case problem(String)
+
+    var needsKeys: Bool { self == .packages }
+
+    var titleID: UInt64? {
+        switch self {
+        case .nup(let u): u.lastPathComponent.firstMatch(of: /\[([0-9A-Fa-f]{16})\]/).flatMap { UInt64($0.1, radix: 16) }
+        case .dump(let t, _, _): t
+        default: nil
+        }
+    }
+
+    /// Los juegos de Switch 2 tienen title ID 04…; los de Switch, 01….
+    static func isSwitch2(_ titleID: UInt64?) -> Bool { titleID.map { $0 >> 56 == 0x04 } ?? false }
+
+    static func isNUPFile(_ u: URL) -> Bool {
+        guard u.pathExtension.lowercased() == "nup", !u.lastPathComponent.hasPrefix("._"),
+              let h = try? FileHandle(forReadingFrom: u) else { return false }
+        defer { try? h.close() }
+        return (try? h.read(upToCount: 3)) == Data("NUP".utf8)
+    }
+
+    /// nil: en la carpeta no hay nada que construir.
+    static func detect(_ dir: URL) -> GameSource? {
+        let items = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+            .map { $0.resolvingSymlinksInPath() }
+        if items.contains(where: GameFile.isGameFile) { return .packages }
+        let nups = items.filter(isNUPFile)
+        if nups.count > 1 {
+            return .problem("Hay \(nups.count) NUP en la carpeta (\(nups.map(\.lastPathComponent).joined(separator: ", "))): deja un juego por carpeta.")
+        }
+        if let n = nups.first { return .nup(n) }
+        return dump(dir)
+    }
+
+    // MARK: Dump (scripts/pack_dump.py: is_dump, scan)
+
+    private static func isDir(_ u: URL) -> Bool {
+        var d: ObjCBool = false
+        return FileManager.default.fileExists(atPath: u.path, isDirectory: &d) && d.boolValue
+    }
+    private static func hasCode(_ u: URL) -> Bool {
+        FileManager.default.fileExists(atPath: u.appendingPathComponent("exefs/main.npdm").path)
+    }
+    private static func isVersion(_ u: URL) -> Bool { hasCode(u) && isDir(u.appendingPathComponent("romfs")) }
+
+    static func dump(_ dir: URL) -> GameSource? {
+        let fm = FileManager.default
+        let upDir = dir.appendingPathComponent("updates")
+        let updates: [Int: URL] = Dictionary(uniqueKeysWithValues: ((try? fm.contentsOfDirectory(at: upDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { isDir($0) && !$0.lastPathComponent.isEmpty && $0.lastPathComponent.allSatisfy(\.isNumber) }
+            .compactMap { u in Int(u.lastPathComponent).map { ($0, u) } })
+        let base: URL? = hasCode(dir.appendingPathComponent("base")) ? dir.appendingPathComponent("base") : (isVersion(dir) ? dir : nil)
+        let isDump = base.map { isDir($0.appendingPathComponent("romfs")) || updates.values.contains { isDir($0.appendingPathComponent("romfs")) } }
+            ?? updates.values.contains(where: isVersion)
+        guard isDump else { return nil }
+        let codeDir = base ?? updates.filter { isVersion($0.value) }.max { $0.key < $1.key }?.value
+        let tid = codeDir.flatMap { programID(npdm: $0.appendingPathComponent("exefs/main.npdm")) }
+        let dlc = ((try? fm.contentsOfDirectory(at: dir.appendingPathComponent("dlc"), includingPropertiesForKeys: nil)) ?? []).filter(isDir).count
+        return .dump(titleID: tid, updates: updates.keys.sorted(), dlc: dlc)
+    }
+
+    /// El program ID de la sección ACI0 de main.npdm (pack_dump.program_id).
+    static func programID(npdm: URL) -> UInt64? {
+        guard let d = try? Data(contentsOf: npdm), d.count >= 0x78, d.prefix(4) == Data("META".utf8) else { return nil }
+        let b = [UInt8](d)
+        func u32(_ o: Int) -> Int { Int(b[o]) | Int(b[o + 1]) << 8 | Int(b[o + 2]) << 16 | Int(b[o + 3]) << 24 }
+        let off = u32(0x70), size = u32(0x74)
+        guard size >= 0x18, off + 0x18 <= b.count, Array(b[off..<off + 4]) == Array("ACI0".utf8) else { return nil }
+        return (0..<8).reduce(UInt64(0)) { $0 | UInt64(b[off + 0x10 + $1]) << (8 * $1) }
+    }
+}

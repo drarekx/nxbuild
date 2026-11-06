@@ -18,6 +18,7 @@ struct ContentView: View {
     @State private var dropTargeted = false
     @State private var keyCheck: KeyCheck?
     @State private var selection: GameSelection?
+    @State private var source: GameSource?
     @State private var dropMessage: String?
     @State private var showFreeSpace = false
     @State private var diagCopied = false
@@ -42,6 +43,7 @@ struct ContentView: View {
         .task(id: "\(nspDir)|\(keysPath)") { await runKeyCheck() }
         .task(id: nspDir) { await runCloudCheck() }
         .task(id: nspDir) { await scanSelection() }
+        .task(id: nspDir) { await detectSource() }
         .onChange(of: deps.checking) { _, checking in
             if !checking { Task { metal = await MetalCheck.run(repoPath: settings.repoPath) } }
         }
@@ -84,6 +86,10 @@ struct ContentView: View {
                 }
 
                 section(2, "Claves (prod.keys)") {
+                    if let source, !source.needsKeys {
+                        Label("No hacen falta: un NUP o un dump no va cifrado.", systemImage: "checkmark.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
                     HStack {
                         Text(keysPath.isEmpty ? "Sin elegir (solo vale para un dump)" : keysPath)
                             .font(.callout.monospaced())
@@ -97,6 +103,7 @@ struct ContentView: View {
                         }
                     }
                     keyStatus
+                    }
                 }
 
                 section(3, "Qué crear") {
@@ -156,7 +163,7 @@ struct ContentView: View {
                 .font(.system(size: 30))
                 .foregroundStyle(.tint)
             if nspDir.isEmpty {
-                Text("Arrastra aquí la carpeta del juego, o los NSP / NSZ / XCI sueltos (y prod.keys)")
+                Text("Arrastra aquí la carpeta del juego, los NSP / NSZ / XCI sueltos (y prod.keys), un .nup o la carpeta de un dump")
                     .multilineTextAlignment(.center).foregroundStyle(.secondary)
             } else {
                 Text(URL(fileURLWithPath: nspDir).lastPathComponent).font(.headline).lineLimit(1)
@@ -165,7 +172,7 @@ struct ContentView: View {
             }
             Button(nspDir.isEmpty ? "Elegir carpeta…" : "Cambiar…") {
                 let start = nspDir.isEmpty ? settings.defaultBrowseDir : nspDir
-                if let u = choose(mode: .folder, start: start, prompt: "Carpeta con los NSP del juego") { setNSP(u) }
+                if let u = choose(mode: .folder, start: start, prompt: "Carpeta con los NSP, el .nup o el dump del juego") { setNSP(u) }
             }
         }
         .frame(maxWidth: .infinity)
@@ -190,6 +197,7 @@ struct ContentView: View {
     /// Los archivos del juego elegido, por papel. En una carpeta hecha con enlaces (archivos sueltos) se pueden quitar.
     @ViewBuilder private var fileList: some View {
         let staged = !nspDir.isEmpty && GameStaging.isStaged(URL(fileURLWithPath: nspDir))
+        sourceSummary
         if let sel = selection, !(sel.isEmpty && sel.ignored.isEmpty) {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(sel.files, id: \.url) { f in
@@ -225,6 +233,46 @@ struct ContentView: View {
         }
     }
 
+    /// Un NUP o un dump: qué es, su title ID y si es de Switch 2. Los paquetes se listan en fileList.
+    @ViewBuilder private var sourceSummary: some View {
+        switch source {
+        case .nup(let u)?:
+            sourceRow("NUP", u.lastPathComponent, titleID: source?.titleID)
+        case .dump(let tid, let ups, let dlc)?:
+            let parts = [ups.isEmpty ? nil : "\(ups.count) update\(ups.count == 1 ? "" : "s") (v\(ups.map(String.init).joined(separator: ", v")))",
+                         dlc == 0 ? nil : "\(dlc) DLC"].compactMap { $0 }
+            sourceRow("Dump", parts.isEmpty ? "Juego base" : parts.joined(separator: " · "), titleID: tid)
+        case .problem(let why)?:
+            Label(why, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        default:
+            if GameSource.isSwitch2(selection?.appID) { switch2Tag }
+        }
+    }
+
+    private func sourceRow(_ kind: String, _ text: String, titleID: UInt64?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(kind).font(.caption.bold()).foregroundStyle(.secondary).frame(width: 92, alignment: .leading)
+                Text(text).font(.caption).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 6) {
+                if let t = titleID { Text(String(format: "%016llX", t)).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                if GameSource.isSwitch2(titleID) { switch2Tag }
+            }
+        }
+    }
+
+    private var switch2Tag: some View { StatusTag(text: "Switch 2", color: .red) }
+
+    private func detectSource() async {
+        guard !nspDir.isEmpty else { source = nil; return }
+        let dir = URL(fileURLWithPath: nspDir)
+        let s = await Task.detached { GameSource.detect(dir) }.value
+        if !Task.isCancelled { source = s }
+    }
+
     /// Una carpeta sola = elegirla. Archivos (y carpetas mezcladas) = se reparten por title ID en base, update y DLC
     /// y se enlazan en ~/NX Build/<juego>. Un prod.keys soltado se usa como claves.
     private func handleDrop(_ urls: [URL]) -> Bool {
@@ -234,6 +282,30 @@ struct ContentView: View {
         if let k = urls.last(where: { $0.pathExtension.lowercased() == "keys" }) { keysPath = k.path }
         let folders = urls.filter(isDir)
         var games = urls.filter(GameFile.isGameFile)
+        // Un .nup suelto: es el juego entero (base, updates y DLC). Se construye en su carpeta si no hay nada más de juego
+        // en ella; si no, en ~/NX Build/<nombre> con un enlace.
+        if let nup = urls.first(where: GameSource.isNUPFile), games.isEmpty, folders.isEmpty {
+            let parent = nup.deletingLastPathComponent()
+            let siblings = ((try? fm.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)) ?? [])
+                .filter { GameFile.isGameFile($0) || GameSource.isNUPFile($0) }
+            if siblings.count == 1 { selection = nil; setNSP(parent); return true }
+            var name = nup.deletingPathExtension().lastPathComponent.replacing(/\s*\[[^\]]*\]/, with: "")
+                .trimmingCharacters(in: .whitespaces)
+            if name.isEmpty { name = "Juego" }
+            do {
+                let dir = GameStaging.root.appendingPathComponent(name)
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                for item in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isSymbolicLinkKey])) ?? []
+                where (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+                    try? fm.removeItem(at: item)
+                }
+                try fm.createSymbolicLink(at: dir.appendingPathComponent(nup.lastPathComponent), withDestinationURL: nup)
+                selection = nil; setNSP(dir)
+            } catch {
+                dropMessage = "No se pudo preparar la carpeta: \(error.localizedDescription)"
+            }
+            return true
+        }
         if folders.count == 1, games.isEmpty { setNSP(folders[0]); return true }
         for d in folders {
             games += ((try? fm.contentsOfDirectory(at: d, includingPropertiesForKeys: nil)) ?? []).filter(GameFile.isGameFile)
@@ -306,7 +378,10 @@ struct ContentView: View {
         guard !nspDir.isEmpty, !keysPath.isEmpty else { return }
         let folder = URL(fileURLWithPath: nspDir), keys = URL(fileURLWithPath: keysPath)
         keyChecking = true
-        let r = await Task.detached { KeyCheck.run(folder: folder, keysFile: keys) }.value
+        let r = await Task.detached { () -> KeyCheck? in
+            guard GameSource.detect(folder)?.needsKeys ?? true else { return nil }
+            return KeyCheck.run(folder: folder, keysFile: keys)
+        }.value
         if !Task.isCancelled { keyCheck = r }
         keyChecking = false
     }
@@ -388,7 +463,7 @@ struct ContentView: View {
             opts.workDir = CloudFolder.localWorkDir(for: dir).path
         }
         runner.start(settings: settings, nspDir: dir,
-                     keys: keysPath.isEmpty ? nil : URL(fileURLWithPath: keysPath),
+                     keys: keysPath.isEmpty || source?.needsKeys == false ? nil : URL(fileURLWithPath: keysPath),
                      platform: platform, options: opts)
     }
 
@@ -443,6 +518,12 @@ struct ContentView: View {
                         Button("Abrir Dependencias") { openWindow(id: "deps") }
                     case .openSettings:
                         Button("Abrir Ajustes") { openSettings() }
+                    case .chooseKeys:
+                        Button("Elegir prod.keys…") {
+                            if let u = choose(mode: .file, start: keysPath.isEmpty ? settings.keysPath : keysPath, prompt: "prod.keys") {
+                                keysPath = u.path
+                            }
+                        }
                     case .retry(let flag):
                         Button("Construir igualmente (\(flag))") {
                             switch flag {
@@ -468,9 +549,11 @@ struct ContentView: View {
     }
 
     private var canBuild: Bool {
-        !nspDir.isEmpty && settings.pythonOK && settings.scriptOK && !runner.isRunning
+        !nspDir.isEmpty && settings.pythonOK && settings.scriptOK && !runner.isRunning && !sourceBlocks
             && (metal?.matches ?? true || options.allowOtherMetal)
     }
+
+    private var sourceBlocks: Bool { if case .problem = source { true } else { false } }
 
     private var buildButtons: some View {
         HStack {
@@ -558,6 +641,9 @@ struct ContentView: View {
                     if let eta = runner.current.eta { Text("quedan ~\(hms(eta))") }
                 }
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                if runner.isScanningLastShaderFiles {
+                    NoteCallout(text: "Revisar los últimos archivos de shaders puede tardar varios minutos: no está colgado.")
+                }
                 NoteCallout(text: "Puedes cerrar esta ventana: la build sigue y te aviso al terminar.")
             }
             if !runner.isRunning, runner.phase != .idle, let dir = runner.outputDir {

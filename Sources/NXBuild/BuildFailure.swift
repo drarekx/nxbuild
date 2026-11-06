@@ -17,6 +17,7 @@ struct BuildFailure: Equatable {
         case openDependencies
         case openSettings
         case retry(flag: String)   // vuelve a construir con un --allow-*
+        case chooseKeys            // elegir otro prod.keys
     }
 
     var kind: Kind
@@ -45,11 +46,11 @@ enum BuildFailureClassifier {
         (.damagedNSP, "files fail the NCA's hash check|hash check failed: "),
         (.a32Program, "is a 32-bit ARM program"),
         (.keysMissing, "(?m)^\\[RED\\] no such file: "),
-        (.keysOld, "MissingKeyException|[Mm]issing (title |key area |header )?key|Unable to decrypt"),
+        (.keysOld, "the keys are older than the game|MissingKeyException|[Mm]issing (title |key area |header )?key|Unable to decrypt"),
         (.severalGames, "more than one game in the folder"),
         (.noGame, "no NSP with a readable title ID in |no base game NSP found in |not a folder: "),
         (.updateMissing, "no NSP for update "),
-        (.diskFull, "less than [0-9]+ GB free on the volume of |No space left on device"),
+        (.diskFull, "less than [0-9]+ GB free on the volume of |No space left on device|metal-tt needs about [0-9.]+ GB|GB free before merging; need at least|when it failed: likely out of disk space"),
         (.cloudFolder, "resource fork, Finder information, or similar detritus not allowed"),
         (.unsupportedShaders, "the shader split found no shaders|Unreal paks, but none"),
         (.language, "the game has no .+; its languages: |unknown game language"),
@@ -116,7 +117,8 @@ enum BuildFailureClassifier {
         case .keysMissing:
             ("No encuentro prod.keys", "Elige el archivo prod.keys otra vez.", [])
         case .keysOld:
-            ("prod.keys no abren el juego", "Faltan claves de la generación que pide el juego o el update. Saca unas prod.keys de una consola con un firmware más reciente.", [])
+            ("prod.keys más viejas que el juego", detail.map { "A estas prod.keys les falta \($0). Saca unas prod.keys de una consola con ese firmware o uno posterior, y elígelas." }
+                ?? "Faltan claves de la generación que pide el juego o el update. Saca unas prod.keys de una consola con un firmware más reciente.", [.chooseKeys])
         case .severalGames:
             ("Varios juegos en la carpeta", "Deja un juego por carpeta, o indica cuál con --title-id en Argumentos extra.", [])
         case .noGame:
@@ -124,7 +126,7 @@ enum BuildFailureClassifier {
         case .updateMissing:
             ("Falta el update que pide el perfil", "El perfil del juego necesita una versión de update que no está en la carpeta. Añade ese NSP (GAMES.md dice cuál).", [])
         case .diskFull:
-            ("Sin espacio en disco", detail.map { "Hacen falta al menos \($0) GB libres en el disco de la build. Libera espacio y vuelve a construir." }
+            ("Sin espacio en disco", detail.map { "Hacen falta unos \($0) GB libres en el disco de la build. Libera espacio (o elige una carpeta en otro disco) y vuelve a construir." }
                 ?? "El disco se ha llenado. Libera espacio y vuelve a construir.", [])
         case .cloudFolder:
             ("Carpeta sincronizada con la nube", "codesign rechaza los atributos que añade iCloud/Dropbox/OneDrive. Activa «Construir en ~/NX Build» bajo la carpeta del juego, o mueve el juego a una carpeta que no se sincronice.", [])
@@ -171,8 +173,18 @@ enum BuildFailureClassifier {
     }
 
     private static func detail(_ kind: BuildFailure.Kind, in text: String) -> String? {
-        guard kind == .diskFull, let r = text.range(of: "less than [0-9]+ GB", options: .regularExpression) else { return nil }
-        return text[r].split(separator: " ").dropFirst(2).first.map(String.init)
+        switch kind {
+        case .diskFull:
+            // build_ipa_from_nsp.py: «less than N GB free»; pso_offline.py: «needs about N GB» / «need at least N GB».
+            guard let m = text.firstMatch(of: /less than ([0-9.]+) GB|needs about ([0-9.]+) GB|need at least ([0-9.]+) GB/) else { return nil }
+            return String(m.1 ?? m.2 ?? m.3 ?? "")
+        case .keysOld:
+            // nx_extract: «prod.keys has no <clave> (master key 13, which came with firmware 19.0.0): the keys are older…»
+            guard let m = text.firstMatch(of: /prod\.keys has no (\S+) \(master key [0-9a-f]+, which came with ([^)]+)\)/) else { return nil }
+            return "\(m.1) (llegó con el \(m.2))"
+        default:
+            return nil
+        }
     }
 
     /// La línea entera donde está la coincidencia, sin el prefijo [RED].

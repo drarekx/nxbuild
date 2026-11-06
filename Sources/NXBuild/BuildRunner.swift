@@ -245,6 +245,7 @@ final class BuildRunner {
                 $0.summary = obj["summary"] as? String ?? ""
                 $0.elapsed = num(obj["elapsed"])
             }
+            if obj["warn"] as? Bool == true, let note = Self.warningNote(log.suffix(40).map(\.text)) { append(note, .note) }
             current = CurrentProgress()
         case "say":
             let msg = obj["msg"] as? String ?? ""
@@ -258,6 +259,26 @@ final class BuildRunner {
         default:
             append(line, .info)
         }
+    }
+
+    /// Por qué una etapa terminó con aviso, en castellano, si se sabe. Hoy: el archivo de pipelines sin espacio en disco
+    /// (dm/gfx/tools/pso_offline.py); la app se empaqueta sin él y lo construye en su primer arranque.
+    nonisolated static func warningNote(_ lines: [String]) -> String? {
+        let text = lines.joined(separator: "\n")
+        guard text.contains("metal-tt needs about") || text.contains("GB free before merging") || text.contains("likely out of disk space")
+        else { return nil }
+        let gb = text.firstMatch(of: /needs about ([0-9.]+) GB|need at least ([0-9.]+) GB/).map { String($0.1 ?? $0.2 ?? "") }
+        return "No había espacio para el archivo de pipelines de Metal" + (gb.map { " (hacen falta unos \($0) GB)" } ?? "")
+            + ": la app se ha creado sin él y lo construirá en su primer arranque (más lento). Libera espacio y vuelve a construir para incluirlo."
+    }
+
+    /// shader_split.py informa por lotes de hasta 16 archivos y se queda en 99 % mientras revisa el último: con 16 o
+    /// menos por hacer, la pantalla avisa de que puede tardar minutos.
+    var isScanningLastShaderFiles: Bool {
+        guard isRunning, let st = stages.last, st.state == .running, st.name == "shader split", st.step == "splitting",
+              current.unit == "files", !current.est, let done = current.done, let total = current.total,
+              done > 0, total > done else { return false }
+        return total - done <= 16
     }
 
     private func updateStage(_ k: Int, _ f: (inout StageRow) -> Void) {

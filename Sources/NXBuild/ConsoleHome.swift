@@ -173,6 +173,7 @@ struct HomeView: View {
     @Environment(\.openSettings) private var openSettings
     @State private var focus = 0
     @State private var trashFor: LibraryGame?
+    @State private var rebuildError: String?
     @State private var optionsFor: LibraryGame?
     @State private var cloudFor: LibraryGame?
     @State private var error: String?
@@ -275,6 +276,9 @@ struct HomeView: View {
                     ? "La app va a la Papelera. En Filebox solo están los archivos del juego: para volver a jugar habrá que construirlo otra vez. Las partidas se quedan."
                     : "La app va a la Papelera. No está en Filebox: para volver a jugar habrá que construirlo otra vez. Las partidas se quedan.")
         }
+        .alert("No se puede reconstruir", isPresented: .constant(rebuildError != nil)) {
+            Button("OK") { rebuildError = nil }
+        } message: { Text(rebuildError ?? "") }
         .alert("No se pudo abrir el juego", isPresented: .constant(error != nil)) {
             Button("OK") { error = nil }
         } message: { Text(error ?? "") }
@@ -388,6 +392,12 @@ struct HomeView: View {
                                 Button("Opciones de lanzamiento…") { optionsFor = g }.disabled(!g.hasLaunchSettings)
                                 Button("Partidas en la nube…") { cloudFor = g }
                                 Button("Ver en la biblioteca") { openLibrary(g.id, false) }
+                                Button("Reconstruir") {
+                                    if let why = Rebuild.request(g, library: library, inbox: inbox, runner: runner) {
+                                        rebuildError = why
+                                    } else { open(.build) }
+                                }
+                                .disabled(runner.isRunning || Rebuild.folder(of: g.url) == nil)
                                 Button("Subir a Filebox") { uploads.upload(g, store: store); openLibrary(g.id, false) }
                                     .disabled(!store.isConfigured || uploads.state(g)?.isActive == true)
                                 Picker("Portada", selection: Binding(get: { Covers.shared.choice(for: g) },

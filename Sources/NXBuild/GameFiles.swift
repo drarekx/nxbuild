@@ -180,6 +180,18 @@ enum Rebuild {
         return dir
     }
 
+    /// Manda la carpeta del juego a Nueva build para que arranque sola. nil si se ha mandado; si no, por qué no.
+    /// Quien llama abre la pantalla de build.
+    @MainActor static func request(_ g: LibraryGame, library: GameLibrary, inbox: BuildInbox, runner: BuildRunner) -> String? {
+        if runner.isRunning { return "Ya hay una build en marcha." }
+        if library.isRunning(g) { return "El juego está abierto. Ciérralo antes de reconstruirlo." }
+        if let why = check(app: g.url, titleID: g.titleID) { return why }
+        guard let dir = folder(of: g.url) else { return "No están los archivos del juego." }
+        inbox.autoStart = true
+        inbox.pending = [dir]
+        return nil
+    }
+
     /// Antes de empezar: que los archivos sean de ese juego. nil si vale; si no, el motivo.
     static func check(app: URL, titleID: String) -> String? {
         guard let dir = folder(of: app) else {

@@ -193,11 +193,7 @@ struct LibraryView: View {
 
     /// Abre Nueva build con la carpeta del juego y la arranca sola (app de Mac). La app nueva sustituye a la vieja.
     private func rebuild(_ g: LibraryGame) {
-        if library.isRunning(g) { rebuildError = "El juego está abierto. Ciérralo antes de reconstruirlo."; return }
-        if let why = Rebuild.check(app: g.url, titleID: g.titleID) { rebuildError = why; return }
-        guard let dir = Rebuild.folder(of: g.url) else { return }
-        inbox.autoStart = true
-        inbox.pending = [dir]
+        if let why = Rebuild.request(g, library: library, inbox: inbox, runner: runner) { rebuildError = why; return }
         showBuild = true
     }
 

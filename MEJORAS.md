@@ -1,6 +1,6 @@
 # Mejoras pendientes para NX Build
 
-Lista sacada de [LNPANDY/NX2Apple](https://github.com/LNPANDY/NX2Apple) (commit `758569c`, 2 nov 2026; revisada hasta `6d1c3007` el 2 nov 2026, ver «Novedades» al final). Su app de Mac
+Lista sacada de [LNPANDY/NX2Apple](https://github.com/LNPANDY/NX2Apple) (commit `758569c`, 2 nov 2026; revisada hasta `994ede7` el 6 nov 2026, ver «Novedades» al final). Su app de Mac
 se llama NSPortBuilder y está en `frontend/`. Hace lo mismo que NX Build (una interfaz para
 `scripts/build_ipa_from_nsp.py`) y bastante más. Aquí solo está lo que ellos hacen y NX Build no.
 Lo he sacado de su README, de `frontend/README.md` y de los comentarios de cabecera de sus archivos Swift.
@@ -120,6 +120,10 @@ No he ejecutado su app.
     - Avisar de los DLC que son solo una licencia: NSP de menos de 1 MB sin contenido. El script ya lo indica en su informe.
     - Para saber con qué archivos se construyó cada app, guardar en `library.json` la carpeta de origen de cada build.
 
+48. ✅ **Hecho (6 nov 2026, v1.6.0): mover un juego a otro disco.** Biblioteca › Mover a otro disco…: la app, su
+    carpeta de build y los NSP/NUP/dump (resolviendo los enlaces de ~/NX Build), con ditto, comprobación de bytes y borrado
+    del original al final; extract/ y tmp/ no viajan salvo que se pida. `GameMove.swift`, `MoveGameView.swift`.
+
 ## Novedades de NX2Apple (revisión del 2 nov 2026, `758569c` → `6d1c3007`)
 
 222 commits. La mayoría reorganizan su código (NXCore, NXModel, NXLauncher, stores) o pasan los textos a JSON
@@ -131,10 +135,10 @@ Apuntado el 2 nov 2026, pendiente. Orden sugerido: 35, 27, 30 (rápidas); luego 
     USB cada archivo pequeño tarda unas 14 veces más (1,7 ms frente a 0,12 ms): la primera build va mucho más lenta.
     Además, en exFAT cada archivo lleva un `._nombre` al lado que rompe la firma de la app de Mac (ver 28). Mirar el
     sistema de archivos del volumen (`volumeLocalizedFormatDescription` / `statfs`) al elegir la carpeta. Commit `38aafc5b`.
-28. **[motor] Archivos `._` de exFAT que rompen la app de Mac.** Su parche 0056 (enviado a seedds/nxnative#991) hace que
+28. ✅ **Motor (6 nov 2026, nxnative `998896ac`):** `pack_app.py` ya salta los `._`. **[motor] Archivos `._` de exFAT que rompen la app de Mac.** Su parche 0056 (enviado a seedds/nxnative#991) hace que
     `pack_app.py` los salte. Nuestro nxnative (`65501fbb`) aún no lo tiene. Mientras tanto, NX Build puede
     bloquear o avisar al construir una app de Mac en exFAT, o pasar `dot_clean` antes de empaquetar. Commit `09bc20ac`.
-29. **[motor] NSP con la tabla de nombres sin el último terminador** (parche 0058) y **llamadas de cola sin marco antes del
+29. ✅ **Motor (6 nov 2026, nxnative `65cc2af4` y `b1c20372`):** los dos arreglos ya están en nuestro nxnative. **[motor] NSP con la tabla de nombres sin el último terminador** (parche 0058) y **llamadas de cola sin marco antes del
     relleno** (parche 0059, `dm/tools/patch_nso.py`). No están en nuestro nxnative. Si un NSP falla en `nx_extract`
     con un PFS0 «roto», puede ser esto: añadirlo a las explicaciones de fallo de `BuildFailure.swift`.
 30. **Pantalla completa y pantalla del lanzador al jugar desde el modo consola.** Al pulsar Jugar en su modo consola pasan
@@ -144,7 +148,7 @@ Apuntado el 2 nov 2026, pendiente. Orden sugerido: 35, 27, 30 (rápidas); luego 
     (`hle_fs.c`). En NX Build: sección «Mods» en las opciones de lanzamiento, que elija la carpeta y la pase al jugar.
 32. **Batería de los mandos y ocultar el puntero en el modo consola.** Muestran la batería de cada mando conectado
     (`GCController.battery`) y esconden el puntero tras unos segundos sin moverlo.
-33. **Construir desde una carpeta con los archivos del juego, sin NSP ni prod.keys.** Nuestro nxnative ya lo hace
+33. **Ampliada en la 37.** **Construir desde una carpeta con los archivos del juego, sin NSP ni prod.keys.** Nuestro nxnative ya lo hace
     (`pack_dump.py`, `dump_folder` en `build_ipa_from_nsp.py`); ellos aún no lo ofrecen en el lanzador (#445). NX Build
     podría aceptar esa carpeta y no pedir claves en ese caso.
 34. **Restablecer cada opción por separado.** Una flecha junto a cada opción que no está en su valor probado (nosotros solo
@@ -154,4 +158,56 @@ Apuntado el 2 nov 2026, pendiente. Orden sugerido: 35, 27, 30 (rápidas); luego 
     del juego a un dispositivo o a un disco (`ShellExport.swift`, `DriveCopy.swift`, commit `8a71b119`); preguntar antes de
     construir si la app compartida lleva frameworks de una cadena de shaders vieja (`StaleFrameworksPrompt.swift`). Solo
     tienen sentido si algún día hacemos la 19.
+
+## Novedades de NX2Apple (revisión del 6 nov 2026, `6d1c3007` → `994ede7`)
+
+217 commits (de su v1.0.2 a la v1.2.2). Mucho es iOS (app compartida, controles táctiles), Qt/Windows, traducciones y
+subidas del motor. Lo que sirve a NX Build (nuestro nxnative en `0f510fd5`):
+
+Orden sugerido: 38, 39 y 40 (rápidas, solo `BuildFailure.swift` y la vista de progreso); luego 37, 41 y 42.
+
+37. ✅ **Hecho (6 nov 2026, v1.6.0).** **Juegos de Switch 2 desde un NUP o una carpeta, sin prod.keys.** Aceptan un `.nup` (o una carpeta que lo tenga) y una
+    carpeta con `base/exefs/main.npdm`: leen el title ID, las actualizaciones y los DLC, no piden claves y no pasan `-k`.
+    Avisan antes de construir si la copia está incompleta, si hay dos NUP en la carpeta o si el motor no tiene
+    `pack_nup.py` / `pack_dump.py`. Ya no exigen perfil: el motor hace uno provisional (`survey_nup` / `survey_dump`).
+    Marcan los juegos de Switch 2 en la biblioteca. Nuestro nxnative lo admite todo (`scripts/pack_nup.py`,
+    `pack_dump.py`, `survey_nup` en `build_ipa_from_nsp.py`; NUP sin juego base desde `777a5f6c`). En NX Build:
+    `GameFiles.extensions` solo tiene nsp/nsz/xci/xcz; añadir `nup`, reconocer la carpeta, y en `KeyCheck` y
+    `ContentView` no pedir prod.keys en esos casos. Commits `f36096e`, `034add2`, `1148600`, `0645efa`, `334a69e`.
+38. ✅ **Hecho (6 nov 2026, v1.6.0).** **Fallo «claves más viejas que el juego».** El motor para la build al momento si a prod.keys le falta la master key del
+    juego (`nx_extract` sale con código 6; el mensaje dice «the keys are older than the game» y nombra la clave y el
+    firmware). Ellos lo explican y ofrecen elegir otro prod.keys. En `BuildFailure.swift` el patrón de `.keysOld` no
+    incluye ese texto: añadir `keys are older than the game` y mostrar la clave y el firmware. Commit `2fead4b`.
+39. ✅ **Hecho (6 nov 2026, v1.6.0)**, también como nota cuando la etapa acaba con aviso. **Fallo por falta de espacio al compilar el archivo de pipelines.** `pso_offline.py` escribe «metal-tt needs about N GB»,
+    «GB free before merging; need at least» y «when it failed: likely out of disk space». Ellos lo clasifican como disco
+    lleno y dicen cuántos GB hacen falta. Nuestro `.diskFull` no reconoce esos textos. Commit `4869fe8`.
+40. ✅ **Hecho (6 nov 2026, v1.6.0).** **Avisar de que los últimos archivos del split de shaders tardan.** El split informa por lotes de hasta 16 archivos y
+    se queda en 99 % varios minutos con el último. Cuando faltan 16 o menos (etapa «shader split», paso «splitting»,
+    unidad «files»), muestran «Revisar los últimos archivos puede tardar varios minutos». En NX Build: en la línea de
+    progreso de `ContentView` / `BuildRunner.current`. Commit `31abb7f`.
+41. **Borrar un juego desde el lanzador.** Una hoja que lista lo que va a la Papelera con su tamaño (app de Mac, IPA,
+    carpeta de build, log); las partidas son un interruptor aparte que empieza apagado; nunca toca los archivos de origen;
+    desactivado durante una build. En NX Build: menú del juego en la biblioteca (`CollectionView` / `Library.swift`),
+    reutilizando el cálculo de tamaños de `FreeSpace.swift`. Commit `4da2903`.
+42. **Carpeta de partidas en la nube por juego y última sincronización.** Muestran qué carpeta cuenta, en el orden de
+    `dm/mac/launcher.c` (env.txt del jugador, env.txt de la app, `cloudSaves.folder` en las preferencias), de dónde sale,
+    y permiten cambiarla o apagarla. Nosotros solo mostramos la etiqueta en `ConsoleHome`. Commit `7891bc9`.
+43. **Portadas de Switch 2 que no están en titledb.** Una lista fija de title ID → imagen 16:9 para los juegos de Switch 2
+    que titledb aún no trae (Ocarina of Time, Star Fox, Yoshi, Mario Tennis Fever…). Y cuando un title ID tiene varios
+    productos (Switch 2 Edition, packs, demos), eligen el del juego. En NX Build: `Covers.swift`. Commits `fee5c16`, `2d32645`.
+44. **La biblioteca sube un nivel cuando el juego base está en una subcarpeta** y sus hermanas tienen las
+    actualizaciones o los DLC (`Base/`, `Update/`, `DLC/`), para tratarlo como un solo juego. Commit `8c65c26`.
+45. **Explicar por qué un juego no tiene opción de resolución** (no hay fila de escala en su build, p. ej. Xenoblade 2) y
+    nombrar las opciones más cercanas (modo consola, reescalado). En las opciones de lanzamiento. Commit `b97eb40`.
+46. **[parche] Joy-Con separados como dos mandos de lado** (`DM_JOYCON_SPLIT=1`) y **Steam Controller 2026** con
+    mapeos por juego. No están en nuestro nxnative. Commits `fc56ca3`, `94f5604`.
+47. **[parche] «Constructor experimental» `nxbuild`/`nxb`**: un binario aparte que hace la extracción y el split de shaders
+    mucho más rápido, byte a byte igual; el script lo usa si está (`DM_EXPERIMENTAL_BUILDER=1`, `NXB_BIN`) y si no, el
+    paso de Python. Depende de su parche 0073 (enviado como seedds/nxnative#1325). Vigilar si llega a upstream.
+    Commits `2280f43`, `28b97f5`, `98c0340`.
+
+Ya hecho o no aplica: avisar del formato del disco antes de una app de Mac (`baf78f2`, es nuestra 27, pendiente);
+extensiones en mayúsculas y `swap_by_moves` en volúmenes no APFS ya están en nuestro nxnative (`7dc00e4d`, `5061b2a1`);
+la opción de 120 fps la ofrece el motor desde el perfil (`fps_max`), y NX Build ya la muestra porque lee las opciones
+del `launcher.json` de cada app (`LaunchSettings.swift`).
 
